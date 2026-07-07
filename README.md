@@ -69,11 +69,14 @@ firefighter), Sarah (tight accountant), Emma (med student who can't fold),
 Dave (blunt contractor), Linda (patient retired math teacher), Frank (barber
 riding imaginary heaters) and Ray (quiet trucker). They talk like normal
 people at a card table — short, casual, reacting to what actually happened —
-not like scripted characters. Each hand, every decision is one API call with
-only public information plus that player's own cards — the prompt spells out
-their made hand and pot odds, and demands disciplined play: big bets need
-real hands. They bluff, needle you, answer your table talk, and hold grudges
-(and debts) across hands.
+not like scripted characters. As far as they know, everyone at the table
+(you included) is just another person; nobody is told a human or a bot is
+playing. Each hand, every decision is one API call with only public
+information plus that player's own cards — the prompt spells out their made
+hand and pot odds. They play a loose home-game style: hard to bluff off a
+pot, happy to call with a piece or a draw, and only shoving all-in with a
+real hand — but they still fold trash to big pressure. They bluff, needle
+you, answer your table talk, and hold grudges (and debts) across hands.
 
 If the API is unreachable mid-game, that opponent quietly falls back to
 built-in instincts, so the game never crashes.

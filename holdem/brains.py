@@ -160,8 +160,8 @@ class HeuristicBrain:
 
         pot_odds = to_call / float(pot + to_call)
         eff = strength + (loose - 0.5) * 0.22
-        # Facing a huge bet, only a genuinely strong hand continues.
-        if to_call >= max(player.stack // 2, 4 * bb) and eff < 0.75:
+        # Facing a shove-sized bet, only a genuinely strong hand continues.
+        if to_call >= max(player.stack // 2, 5 * bb) and eff < 0.71:
             return Action(FOLD), None
         if eff > pot_odds + 0.28 and can_raise and rng.random() < aggr:
             if strength > 0.92 and rng.random() < aggr * 0.35:
@@ -169,10 +169,13 @@ class HeuristicBrain:
             target = int((pot + to_call) * (0.8 + rng.random() * 0.7))
             target = max(min_to, min(target, max_to))
             return Action(RAISE, target), say
-        if eff >= pot_odds:
+        # Don't give up too easily: call a little past strict pot odds, more so
+        # for looser players, since folding at the first bet just bleeds chips.
+        slack = 0.04 + loose * 0.05
+        if eff >= pot_odds - slack:
             return Action(CALL), say
-        # Loose players peel small bets anyway.
-        if to_call <= bb and rng.random() < loose * 0.5:
+        # Cheap bets get peeled — nobody likes folding for one more small call.
+        if to_call <= 2 * bb and rng.random() < 0.25 + loose * 0.35:
             return Action(CALL), say
         return Action(FOLD), None
 
@@ -198,9 +201,9 @@ SYSTEM_TEMPLATE = """You are {name}, a regular person playing in a friendly No-L
 
 Who you are: {style}
 
-Play genuinely good poker in line with who you are: weigh your hand strength, pot odds, position, stack sizes, and how the others have been acting tonight. Bluff when it fits you, and vary your bet sizes so you stay unpredictable.
+Everyone here is a regular person like you — friends around a kitchen table, nobody's a computer. Play genuinely good poker in line with who you are: weigh your hand strength, pot odds, position, stack sizes, and how the others have been acting tonight. Bluff when it fits you, and vary your bet sizes so you stay unpredictable.
 
-Discipline matters more than flair: going all-in, or calling one, demands a genuinely strong hand or overwhelming pot odds — folding weak hands to big bets is what winners do. Don't spew chips on hopeless holdings just to look bold.
+Don't be a pushover: good players don't fold every time someone bets. Defend your blinds, call with any reasonable hand, pair, or decent draw when the price isn't crazy, and fight back with the occasional float or bluff-raise — folding at the first sign of pressure just bleeds chips and lets people run you over. Save the disciplined lay-downs for when someone commits real money and you genuinely have almost nothing. Only shove all-in with a strong hand or a good read, but between checking, calling, and raising, lean toward staying in the fight rather than giving up.
 
 Respond with ONE JSON object and nothing else:
 {{"action": "fold" | "check" | "call" | "raise" | "all_in", "raise_to": <integer, required only for "raise">, "say": "<optional short remark to the table, or empty string>"}}
@@ -211,7 +214,7 @@ Hard rules:
 - Never state your actual hole cards in "say" (misleading people is fine).
 - Don't repeat remarks you've already made tonight.
 - Only "check" when there is nothing to call.
-- You can talk to anyone at the table in "say" — the human or the other players. Use their name when you mean a specific person, and if someone spoke to you, it's natural to answer them."""
+- You can talk to anyone at the table in "say". Use their name when you mean a specific person, and if someone spoke to you, it's natural to answer them."""
 
 
 CHAT_SYSTEM_TEMPLATE = """You are {name}, a regular person at a friendly No-Limit Texas Hold'em home game with people you know.
