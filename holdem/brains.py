@@ -184,6 +184,11 @@ class HeuristicBrain:
             return self.rng.choice(self.p["taunts"])
         return None
 
+    def react(self, player, situation, chat, event):
+        if self.rng.random() < 0.7:
+            return self.rng.choice(self.p["taunts"])
+        return None
+
 
 # ---------------------------------------------------------------------------
 # LLM brain
@@ -213,7 +218,7 @@ CHAT_SYSTEM_TEMPLATE = """You are {name}, a regular person at a friendly No-Limi
 
 Who you are: {style}
 
-Someone at the table just said something. Answer with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, deflect, joke, or answer straight — whatever fits you and the moment. You can answer whoever spoke or pull anyone else into it — use a person's name when you mean them specifically. Never reveal your actual hole cards (misleading people is fine). If you have nothing worth saying, reply with exactly: SILENT"""
+Something just happened at the table — somebody said something, or made a move worth noticing. Respond with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, needle, deflect, joke, or answer straight — whatever fits you and the moment. You can talk to whoever it concerns or pull anyone else into it — use a person's name when you mean them specifically. Never reveal your actual hole cards (misleading people is fine). If you have nothing worth saying, reply with exactly: SILENT"""
 
 
 def format_chat(chat):
@@ -356,6 +361,18 @@ class LLMBrain:
         ]
         return self._create(messages)
 
+    def _one_liner(self, player, body):
+        messages = [
+            {"role": "system", "content": CHAT_SYSTEM_TEMPLATE.format(
+                name=player.name, style=self.p["style"])},
+            {"role": "user", "content": body},
+        ]
+        raw = self._create(messages, json_mode=False).strip()
+        line = raw.splitlines()[0].strip().strip('"').strip() if raw else ""
+        if not line or line.upper() == "SILENT":
+            return None
+        return line[:140]
+
     def chat_reply(self, player, situation, chat, speaker_name, text, addressed=None):
         try:
             if addressed == "you":
@@ -367,22 +384,23 @@ class LLMBrain:
                         % (speaker_name, addressed, text))
             else:
                 said = '%s just said to the table: "%s"' % (speaker_name, text)
-            messages = [
-                {"role": "system", "content": CHAT_SYSTEM_TEMPLATE.format(
-                    name=player.name, style=self.p["style"])},
-                {"role": "user", "content":
-                    "%s\n\nRecent table talk:\n%s\n\n%s\n"
-                    "Your reply (one short line, or SILENT):"
-                    % (situation, format_chat(chat), said)},
-            ]
-            raw = self._create(messages, json_mode=False).strip()
-            line = raw.splitlines()[0].strip().strip('"').strip() if raw else ""
-            if not line or line.upper() == "SILENT":
-                return None
-            return line[:140]
+            return self._one_liner(player,
+                                   "%s\n\nRecent table talk:\n%s\n\n%s\n"
+                                   "Your reply (one short line, or SILENT):"
+                                   % (situation, format_chat(chat), said))
         except Exception:
             return self.fallback.chat_reply(player, situation, chat,
                                             speaker_name, text, addressed)
+
+    def react(self, player, situation, chat, event):
+        try:
+            return self._one_liner(player,
+                                   "%s\n\nRecent table talk:\n%s\n\nWhat just happened: %s\n"
+                                   "If that's worth a remark, say one short line (name whoever "
+                                   "it concerns if natural); otherwise reply exactly SILENT:"
+                                   % (situation, format_chat(chat), event))
+        except Exception:
+            return self.fallback.react(player, situation, chat, event)
 
     def _parse(self, raw, view):
         match = re.search(r"\{.*\}", raw, re.DOTALL)

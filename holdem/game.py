@@ -154,6 +154,30 @@ class TexasHoldemGame:
         """Entry point for a spoken line (human `say` or between-hands chat)."""
         self.deliver_chat(speaker, text)
 
+    def reaction_chance(self, desc):
+        if "ALL-IN" in desc or "all-in" in desc:
+            return 0.5
+        if desc.startswith(("raises", "bets")):
+            return 0.25
+        if desc.startswith("calls"):
+            return 0.08
+        return 0.05  # checks, folds
+
+    def react_to_event(self, actor, event, chance):
+        """Sometimes a bystander comments on a move or a result. The comment
+        goes through deliver_chat, so whoever it addresses can answer back."""
+        if self.rng.random() >= chance:
+            return
+        candidates = [pl for pl in self.players
+                      if pl is not actor and hasattr(pl, "brain")]
+        if not candidates:
+            return
+        reactor = self.rng.choice(candidates)
+        line = reactor.brain.react(reactor, self.chat_situation(reactor),
+                                   list(self.chat), event)
+        if line:
+            self.deliver_chat(reactor, line, in_action=True)
+
     def deliver_chat(self, speaker, text, in_action=False, depth=0):
         """Record one chat line, resolve whom it addresses, show it, and let
         the addressed players answer — whoever spoke, human or agent. Depth
@@ -325,6 +349,11 @@ class TexasHoldemGame:
             ui.announce_action(p, desc)
             if say:
                 self.deliver_chat(p, say, in_action=True)
+            else:
+                # Moves draw comments too, not just words — the bigger the
+                # move, the more likely someone has something to say about it.
+                self.react_to_event(p, "%s %s." % (p.name, desc),
+                                    self.reaction_chance(desc))
             if not p.is_human:
                 self.pause(0.6)
             if reopened:
@@ -446,6 +475,8 @@ class TexasHoldemGame:
         self.memory.append("Hand %d: %s won %d without a showdown (everyone folded)."
                            % (self.hand_no, winner.name, total))
         self.memory = self.memory[-8:]
+        self.react_to_event(winner, "%s just won the pot of %d because everyone folded."
+                            % (winner.name, total), 0.3)
         self.pause(1.0)
 
     def showdown(self):
@@ -460,6 +491,9 @@ class TexasHoldemGame:
         if summaries:
             self.memory.append("Hand %d: %s" % (self.hand_no, summaries[0]))
             self.memory = self.memory[-8:]
+            # Showdowns are worth talking about — anyone may pipe up,
+            # winner gloating included.
+            self.react_to_event(None, "Showdown result: %s" % summaries[0], 0.45)
         self.pause(1.2)
 
     def award_pots(self, contenders, results):

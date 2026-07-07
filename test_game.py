@@ -326,6 +326,23 @@ def test_table_talk_gets_replies():
     ok(view["chat"] == game.chat, "agents see the conversation in their view")
 
 
+def test_move_reactions():
+    game, players = talk_game(["Mike", "Sarah", "Emma"], seed=2)
+    mike = players[0]
+    ok(game.reaction_chance("goes ALL-IN for 900") > game.reaction_chance("raises to 60")
+       > game.reaction_chance("checks"),
+       "bigger moves draw comments more often")
+    for _ in range(5):  # heuristic reactors stay quiet sometimes; a few rolls suffice
+        game.react_to_event(mike, "Mike goes ALL-IN for 900.", chance=1.0)
+        if game.chat:
+            break
+    ok(len(game.chat) >= 1, "a bystander comments on a big move")
+    ok(game.chat[0][0] != "Mike", "the comment comes from someone else, not the actor")
+    before = len(game.chat)
+    game.react_to_event(mike, "Mike checks.", chance=0.0)
+    ok(len(game.chat) == before, "chance 0 means silence")
+
+
 def test_agents_answer_each_other():
     game, players = talk_game(["Mike", "Sarah", "Emma"], seed=5)
     mike = players[0]
@@ -376,6 +393,7 @@ if __name__ == "__main__":
     test_rebuy_adds_debt_nobody_leaves()
     test_addressee_resolution()
     test_table_talk_gets_replies()
+    test_move_reactions()
     test_agents_answer_each_other()
     test_fuzz_full_games()
     print("all good: %d checks passed" % CHECKS["passed"])
