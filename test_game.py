@@ -3,7 +3,7 @@
 import random
 
 from holdem import evaluator, ui
-from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain
+from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, spoken_action
 from holdem.cards import Card, Deck, RANK_VALUES
 from holdem.game import TexasHoldemGame
 from holdem.players import Action, LLMPlayer, Player, ALL_IN, CALL, CHECK, FOLD, RAISE
@@ -216,6 +216,78 @@ def test_llm_parsing():
         ok(True, "garbage reply raises for fallback to handle")
 
 
+def test_spoken_action_detection():
+    # Clear first-person declarations.
+    ok(spoken_action("I fold") == FOLD, "'I fold' -> fold")
+    ok(spoken_action("alright, I'm folding") == FOLD, "'I'm folding' -> fold")
+    ok(spoken_action("I call") == CALL, "'I call' -> call")
+    ok(spoken_action("I'll call that") == CALL, "'I'll call' -> call")
+    ok(spoken_action("I check") == CHECK, "'I check' -> check")
+    ok(spoken_action("I raise") == RAISE, "'I raise' -> raise")
+    ok(spoken_action("I'm raising this") == RAISE, "'I'm raising' -> raise")
+    ok(spoken_action("I'm all in!") == ALL_IN, "'I'm all in' -> all-in")
+    ok(spoken_action("all in baby") == ALL_IN, "bare 'all in' in own line -> all-in")
+    ok(spoken_action("I'm shipping it") == ALL_IN, "'shipping it' -> all-in")
+    ok(spoken_action("I shove") == ALL_IN, "'I shove' -> all-in")
+
+    # Things that must NOT be read as the speaker's move.
+    ok(spoken_action("") is None, "empty say -> no declaration")
+    ok(spoken_action(None) is None, "None say -> no declaration")
+    ok(spoken_action("nice call") is None, "'nice call' is praise, not a call")
+    ok(spoken_action("you fold too much") is None, "'you fold' is about someone else")
+    ok(spoken_action("you should just fold") is None, "advice to others isn't self-declaration")
+    ok(spoken_action("are you all in?") is None, "a question isn't a declaration")
+    ok(spoken_action("you going all in?") is None, "'you ... all in?' isn't self-declaration")
+    ok(spoken_action("I'm not folding") is None, "negated fold -> no declaration")
+    ok(spoken_action("I'm not going all in here") is None, "negated all-in -> no declaration")
+    ok(spoken_action("I've got the nuts") is None, "a card bluff names no move")
+    ok(spoken_action("maybe I fold, maybe not") is None, "hedged talk -> no declaration")
+    ok(spoken_action("call or fold, tough spot") is None, "musing over options -> no declaration")
+
+    # Negation lets the real, non-negated move win.
+    ok(spoken_action("I'm not folding, I'm all in") == ALL_IN,
+       "negated fold + real shove -> all-in")
+
+
+def test_words_conform_to_moves():
+    brain = LLMBrain(client=None, model="x", personality=PERSONALITIES[0],
+                     rng=random.Random(1))
+
+    # Speech overrides a contradicting mechanical action.
+    action, say = brain._parse('{"action": "call", "say": "actually, I fold"}',
+                               parse_view(to_call=50))
+    ok(action.kind == FOLD, "says fold while action=call -> the move becomes fold")
+
+    action, _ = brain._parse('{"action": "fold", "say": "I\'m all in!"}',
+                             parse_view(to_call=50))
+    ok(action.kind == ALL_IN, "says all-in while action=fold -> the move becomes all-in")
+
+    action, _ = brain._parse('{"action": "call", "say": "you\'re bluffing, I raise"}',
+                             parse_view(to_call=50))
+    ok(action.kind == RAISE, "says raise while action=call -> the move becomes a raise")
+
+    # Bluffing about CARDS never changes the move.
+    action, say = brain._parse('{"action": "call", "say": "I flopped a set, easy call"}',
+                               parse_view(to_call=50))
+    ok(action.kind == CALL and "set" in say, "lying about your hand leaves the move alone")
+
+    # Consistent pairs pass through untouched.
+    action, _ = brain._parse('{"action": "raise", "raise_to": 200, "say": "I raise"}',
+                             parse_view(to_call=50))
+    ok(action.kind == RAISE and action.amount == 200, "matching word + move kept as-is")
+
+    # Talk aimed at others doesn't hijack the move.
+    action, _ = brain._parse('{"action": "all_in", "say": "you should fold, friend"}',
+                             parse_view(to_call=50))
+    ok(action.kind == ALL_IN, "advice to another player never changes your own move")
+
+    # A move the speaker can't legally make: don't lie, drop the claim.
+    action, say = brain._parse('{"action": "call", "say": "I raise big!"}',
+                               parse_view(to_call=50, can_raise=False))
+    ok(action.kind == CALL and say is None,
+       "can't raise here -> keep legal move but drop the false 'I raise'")
+
+
 # --------------------------------------------------------------- fairness
 
 def test_deck_integrity():
@@ -387,6 +459,8 @@ if __name__ == "__main__":
     test_uncalled_chips_returned()
     test_split_pot_with_odd_chip()
     test_llm_parsing()
+    test_spoken_action_detection()
+    test_words_conform_to_moves()
     test_deck_integrity()
     test_deal_fairness()
     test_system_random_games()

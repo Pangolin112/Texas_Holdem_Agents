@@ -211,7 +211,7 @@ Respond with ONE JSON object and nothing else:
 Hard rules:
 - "raise_to" is the TOTAL amount of your bet for this street, not the increment.
 - "say" must sound like a normal person at a real card table: plain, casual, reacting to what's actually going on. No catchphrases, no theatrical persona lines, no emoji, nothing scripted-sounding. Most of the time say nothing ("") or keep it to a few words.
-- Never state your actual hole cards in "say" (misleading people is fine).
+- You may bluff and lie freely about WHAT YOU HAVE — your cards, how strong or weak you are. That's the game. But you must NOT misstate WHAT YOU ARE DOING: if your "say" names your move (fold, check, call, raise, all-in), it has to be exactly the move in "action". If you'd rather keep your move to yourself, just don't mention it.
 - Don't repeat remarks you've already made tonight.
 - Only "check" when there is nothing to call.
 - You can talk to anyone at the table in "say". Use their name when you mean a specific person, and if someone spoke to you, it's natural to answer them."""
@@ -221,7 +221,7 @@ CHAT_SYSTEM_TEMPLATE = """You are {name}, a regular person at a friendly No-Limi
 
 Who you are: {style}
 
-Something just happened at the table — somebody said something, or made a move worth noticing. Respond with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, needle, deflect, joke, or answer straight — whatever fits you and the moment. You can talk to whoever it concerns or pull anyone else into it — use a person's name when you mean them specifically. Never reveal your actual hole cards (misleading people is fine). If you have nothing worth saying, reply with exactly: SILENT"""
+Something just happened at the table — somebody said something, or made a move worth noticing. Respond with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, needle, deflect, joke, or answer straight — whatever fits you and the moment. You can talk to whoever it concerns or pull anyone else into it — use a person's name when you mean them specifically. You can lie about your cards all you want, but don't announce a move (folding, calling, raising, all-in) you aren't actually making. If you have nothing worth saying, reply with exactly: SILENT"""
 
 
 def format_chat(chat):
@@ -315,6 +315,106 @@ What do you do? Respond with the JSON object only.""".format(
         call_line=call_line, raise_line=raise_line,
         seats="\n".join(seats), history=format_history(view["history"]),
         chat=chat_txt, memory=memory_txt)
+
+
+# ---------------------------------------------------------------------------
+# Keeping words honest: a player may lie about their CARDS, but if their spoken
+# line names the move they're making, the actual move must match it.
+# ---------------------------------------------------------------------------
+
+_NEG_RE = re.compile(r"\b(?:not|never|no|n't|won'?t|don'?t|wouldn'?t|can'?t|"
+                     r"maybe|might|if|unless|almost|nearly)\b")
+
+# First-person declarations. Each entry: (action, regex). Anchored to "I" so a
+# comment about someone else ("you fold too much", "nice call") never matches.
+_SELF_DECL = [
+    (FOLD,  re.compile(r"\bi(?:'?m| am| will|'?ll)?\s+(?:fold|folding|out|done|"
+                       r"giv\w* up|muck\w*|gone)\b")),
+    (RAISE, re.compile(r"\bi(?:'?m| am| will|'?ll)?\s+(?:raise|raising|re-?raise|"
+                       r"bump\w*)\b")),
+    (CALL,  re.compile(r"\bi(?:'?m| am| will|'?ll)?\s+call(?:ing)?\b")),
+    (CHECK, re.compile(r"\bi(?:'?m| am| will|'?ll)?\s+check(?:ing)?\b")),
+]
+# All-in: either an "I ..." lead-in or a bare shove phrase in the speaker's own
+# line. Guarded below against second-person and questions ("you all in?").
+_ALLIN_SELF = re.compile(r"\bi(?:'?m| am| will|'?ll)?\s+(?:[a-z']+\s+){0,3}?"
+                         r"(?:all[\s-]?in|shov\w*|jam\w*|shipp?ing? it)\b")
+_ALLIN_BARE = re.compile(r"\b(?:all[\s-]?in|shov(?:e|ing)|jam(?:ming)?|"
+                         r"shipp?ing? it)\b")
+
+
+def _blocked(low, m):
+    """A declaration is void if a negation/hedge sits just before it or inside
+    the matched span ('I'm not going all in', 'maybe I fold')."""
+    before = low[max(0, m.start() - 12):m.start()]
+    return bool(_NEG_RE.search(before) or _NEG_RE.search(m.group(0)))
+
+
+def spoken_action(say):
+    """If `say` clearly declares the speaker's own move, return that action
+    kind; otherwise None. Conservative: ambiguous or conflicting talk -> None,
+    so the mechanical action is left untouched."""
+    if not say:
+        return None
+    low = " " + say.lower() + " "
+    found = set()
+
+    for kind, rx in _SELF_DECL:
+        m = rx.search(low)
+        if m and not _blocked(low, m):
+            found.add(kind)
+
+    m = _ALLIN_SELF.search(low)
+    allin = m is not None and not _blocked(low, m)
+    if not allin:
+        m = _ALLIN_BARE.search(low)
+        # A bare shove counts only in the speaker's own statement: no "you",
+        # not a question ("you going all in?", "are you all in?").
+        if m and not _blocked(low, m) and "you" not in low and "?" not in low:
+            allin = True
+    if allin:
+        found.add(ALL_IN)
+
+    return found.pop() if len(found) == 1 else None
+
+
+def reconcile_action(action, say, view, raise_to=None):
+    """Make the move honor the spoken word. Returns (action, say). If the word
+    can't be honored legally, drop the misleading say instead of lying."""
+    decl = spoken_action(say)
+    if decl is None:
+        return action, say
+    to_call = view["to_call"]
+
+    if decl == FOLD:
+        want = CHECK if to_call == 0 else FOLD
+    elif decl == CALL:
+        want = CHECK if to_call == 0 else CALL
+    elif decl == CHECK:
+        if to_call != 0:            # can't legally check facing a bet
+            return action, say
+        want = CHECK
+    elif decl == RAISE:
+        if not view["can_raise"]:   # can't raise here — don't lie about it
+            return action, None
+        want = RAISE
+    else:  # ALL_IN
+        want = ALL_IN
+
+    if want == action.kind:
+        return action, say          # already consistent, the common case
+
+    if want == RAISE:
+        amount = action.amount if action.kind == RAISE else 0
+        if not amount:
+            try:
+                amount = int(raise_to or 0)
+            except (TypeError, ValueError):
+                amount = 0
+        amount = max(view["min_raise_to"], min(amount or view["min_raise_to"],
+                                               view["max_raise_to"]))
+        return Action(RAISE, amount), say
+    return Action(want), say
 
 
 class LLMBrain:
@@ -412,26 +512,30 @@ class LLMBrain:
         data = json.loads(match.group(0))
 
         say = str(data.get("say") or "").strip()[:100] or None
-        kind = str(data.get("action", "")).strip().lower().replace("-", "_").replace(" ", "_")
+        action = self._mechanical_action(data, view)
+        # A player may bluff about their cards, but their spoken move must match
+        # what they actually do — reconcile any mismatch in favor of the words.
+        return reconcile_action(action, say, view, data.get("raise_to"))
 
+    @staticmethod
+    def _mechanical_action(data, view):
+        kind = str(data.get("action", "")).strip().lower().replace("-", "_").replace(" ", "_")
         if kind == "bet":
             kind = RAISE
         if kind == FOLD:
             # Folding when checking is free is never right; take the free card.
-            return (Action(CHECK) if view["to_call"] == 0 else Action(FOLD)), say
-        if kind == CHECK:
-            return (Action(CHECK) if view["to_call"] == 0 else Action(CALL)), say
-        if kind == CALL:
-            return (Action(CHECK) if view["to_call"] == 0 else Action(CALL)), say
+            return Action(CHECK) if view["to_call"] == 0 else Action(FOLD)
+        if kind in (CHECK, CALL):
+            return Action(CHECK) if view["to_call"] == 0 else Action(CALL)
         if kind == ALL_IN:
-            return Action(ALL_IN), say
+            return Action(ALL_IN)
         if kind == RAISE:
             if not view["can_raise"]:
-                return Action(CALL), say
+                return Action(CALL)
             try:
                 target = int(data.get("raise_to") or 0)
             except (TypeError, ValueError):
                 target = view["min_raise_to"]
             target = max(view["min_raise_to"], min(target, view["max_raise_to"]))
-            return Action(RAISE, target), say
+            return Action(RAISE, target)
         raise ValueError("unknown action %r" % kind)

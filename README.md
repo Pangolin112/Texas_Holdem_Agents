@@ -78,6 +78,12 @@ pot, happy to call with a piece or a draw, and only shoving all-in with a
 real hand — but they still fold trash to big pressure. They bluff, needle
 you, answer your table talk, and hold grudges (and debts) across hands.
 
+Their talk is bound to their chips: a player can lie all day about *what
+they hold* ("I flopped a set"), but if they announce *what they're doing* —
+"I fold", "I'm all in" — the actual move is forced to match. So a spoken
+call is a call and a spoken shove is a shove; only the card-strength story
+can be a bluff.
+
 If the API is unreachable mid-game, that opponent quietly falls back to
 built-in instincts, so the game never crashes.
 
