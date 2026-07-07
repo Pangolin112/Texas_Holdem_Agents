@@ -1,6 +1,7 @@
 """No-Limit Texas Hold'em engine."""
 
 import random
+import re
 import time
 
 from . import evaluator, ui
@@ -107,27 +108,83 @@ class TexasHoldemGame:
 
     # ------------------------------------------------------------- table talk
 
-    def table_talk(self, speaker, text):
-        """Broadcast a chat line and let a few AIs answer immediately."""
-        text = text.strip()[:140]
-        self.chat.append((speaker.name, text))
-        self.chat = self.chat[-12:]
-        ais = [p for p in self.players if p is not speaker and hasattr(p, "brain")]
+    GROUP_CUES = ("everyone", "everybody", "you all", "y'all", "you guys",
+                  "you two", "all of you", "anyone", "anybody", "guys", "folks")
+
+    def player_by_name(self, name):
+        for p in self.players:
+            if p.name == name:
+                return p
+        return None
+
+    def resolve_addressee(self, speaker, text):
+        """Who is this line aimed at? Returns a list of players (empty = the
+        whole table): players named in the text; else, for a bare "you",
+        whoever the speaker is most plausibly replying to."""
         lower = text.lower()
-        mentioned = [p for p in ais
-                     if any(len(w) >= 3 and w.lower() != "the" and w.lower() in lower
-                            for w in p.name.split())]
-        others = [p for p in ais if p not in mentioned]
-        self.rng.shuffle(others)
-        responders = (mentioned + others[:max(0, 2 - len(mentioned))])[:3]
-        for p in responders:
+        others = [p for p in self.players if p is not speaker]
+        named = [p for p in others
+                 if any(len(w) >= 3 and w.lower() != "the"
+                        and re.search(r"\b%s\b" % re.escape(w.lower()), lower)
+                        for w in p.name.split())]
+        if named:
+            return named
+        if any(cue in lower for cue in self.GROUP_CUES):
+            return []
+        if re.search(r"\byou\b|\byours?\b", lower):
+            partner = self.last_interlocutor(speaker)
+            if partner is not None:
+                return [partner]
+        return []
+
+    def last_interlocutor(self, speaker):
+        """The most recent other voice in the conversation, or failing that
+        the last other player to act in this hand."""
+        for name, _to, _text in reversed(self.chat):
+            if name != speaker.name:
+                return self.player_by_name(name)
+        if self.hand_live:
+            for _street, line in reversed(self.history):
+                for p in self.hand_players:
+                    if p is not speaker and line.startswith(p.name + " "):
+                        return p
+        return None
+
+    def table_talk(self, speaker, text):
+        """Entry point for a spoken line (human `say` or between-hands chat)."""
+        self.deliver_chat(speaker, text)
+
+    def deliver_chat(self, speaker, text, in_action=False, depth=0):
+        """Record one chat line, resolve whom it addresses, show it, and let
+        the addressed players answer — whoever spoke, human or agent. Depth
+        keeps an exchange bounded so conversations never spiral."""
+        text = text.strip()[:140]
+        if not text:
+            return
+        addressees = self.resolve_addressee(speaker, text)
+        to_name = addressees[0].name if len(addressees) == 1 else None
+        self.chat.append((speaker.name, to_name, text))
+        self.chat = self.chat[-12:]
+        ui.chat_line(speaker.name, text, to_name)
+        if depth >= 2:
+            return
+        responders = [p for p in addressees if hasattr(p, "brain")]
+        if depth == 0 and not in_action:
+            # A line to the whole table draws a couple of voices at random.
+            others = [p for p in self.players
+                      if p is not speaker and hasattr(p, "brain") and p not in responders]
+            self.rng.shuffle(others)
+            responders += others[:max(0, 2 - len(responders))]
+        for p in responders[:3]:
+            if p in addressees:
+                addressed = "you"
+            else:
+                addressed = to_name  # overhearing someone else's exchange
             reply = p.brain.chat_reply(p, self.chat_situation(p), list(self.chat),
-                                       speaker.name, text)
+                                       speaker.name, text, addressed)
             if reply:
-                self.chat.append((p.name, reply))
-                self.chat = self.chat[-12:]
-                ui.chat_line(p.name, reply)
                 self.pause(0.5)
+                self.deliver_chat(p, reply, in_action=in_action, depth=depth + 1)
 
     def chat_situation(self, p):
         if self.hand_live:
@@ -265,10 +322,9 @@ class TexasHoldemGame:
             action, say = p.decide(self.build_view(p))
             reopened, desc = self.apply_action(p, action)
             self.record(p, desc)
+            ui.announce_action(p, desc)
             if say:
-                self.chat.append((p.name, say))
-                self.chat = self.chat[-12:]
-            ui.announce_action(p, desc, say)
+                self.deliver_chat(p, say, in_action=True)
             if not p.is_human:
                 self.pause(0.6)
             if reopened:

@@ -93,14 +93,15 @@ def street_banner(street, board, pot):
     out(" %s   board: %s   %s" % (bold("── " + street + " ──"), board_txt, _c(C.YELLOW, "pot %d" % pot)))
 
 
-def chat_line(name, text):
-    out(_c(C.MAGENTA, '      %s: "%s"' % (name, text)))
+def chat_line(name, text, to=None):
+    if to:
+        out(_c(C.MAGENTA, '      %s (to %s): "%s"' % (name, to, text)))
+    else:
+        out(_c(C.MAGENTA, '      %s: "%s"' % (name, text)))
 
 
-def announce_action(player, desc, say=None):
+def announce_action(player, desc):
     out("   %s %s." % (name_str(player), desc))
-    if say:
-        chat_line(player.name, say)
 
 
 def thinking(name):

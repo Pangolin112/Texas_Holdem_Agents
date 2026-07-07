@@ -176,8 +176,11 @@ class HeuristicBrain:
             return Action(CALL), say
         return Action(FOLD), None
 
-    def chat_reply(self, player, situation, chat, speaker_name, text):
-        if self.rng.random() < 0.85:
+    def chat_reply(self, player, situation, chat, speaker_name, text, addressed=None):
+        # Spoken to directly -> almost always answer; general remark -> often;
+        # overhearing someone else's exchange -> rarely butt in.
+        chance = 0.95 if addressed == "you" else (0.2 if addressed else 0.6)
+        if self.rng.random() < chance:
             return self.rng.choice(self.p["taunts"])
         return None
 
@@ -203,14 +206,24 @@ Hard rules:
 - Never state your actual hole cards in "say" (misleading people is fine).
 - Don't repeat remarks you've already made tonight.
 - Only "check" when there is nothing to call.
-- If someone spoke to you, it's natural to answer them in "say"."""
+- You can talk to anyone at the table in "say" — the human or the other players. Use their name when you mean a specific person, and if someone spoke to you, it's natural to answer them."""
 
 
 CHAT_SYSTEM_TEMPLATE = """You are {name}, a regular person at a friendly No-Limit Texas Hold'em home game with people you know.
 
 Who you are: {style}
 
-Someone at the table just said something. Answer with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, deflect, joke, or answer straight — whatever fits you and the moment. Never reveal your actual hole cards (misleading people is fine). If you have nothing worth saying, reply with exactly: SILENT"""
+Someone at the table just said something. Answer with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, deflect, joke, or answer straight — whatever fits you and the moment. You can answer whoever spoke or pull anyone else into it — use a person's name when you mean them specifically. Never reveal your actual hole cards (misleading people is fine). If you have nothing worth saying, reply with exactly: SILENT"""
+
+
+def format_chat(chat):
+    lines = []
+    for speaker, to, text in chat[-10:]:
+        if to:
+            lines.append('%s (to %s): "%s"' % (speaker, to, text))
+        else:
+            lines.append('%s: "%s"' % (speaker, text))
+    return "\n".join(lines) or "(quiet so far)"
 
 
 def format_history(history):
@@ -246,7 +259,7 @@ def build_user_prompt(player, view):
         debt_txt = (", debt to the house %d" % pl["debt"]) if pl.get("debt") else ""
         seats.append("- %s%s: stack %d%s — %s" % (pl["name"], tag_txt, pl["stack"], debt_txt, status))
 
-    chat_txt = "\n".join('%s: "%s"' % (n, t) for n, t in view["chat"][-10:]) or "(quiet so far)"
+    chat_txt = format_chat(view["chat"])
     memory_txt = "\n".join(view["memory"][-5:]) or "(this is the first hand)"
 
     made_line = ""
@@ -343,16 +356,24 @@ class LLMBrain:
         ]
         return self._create(messages)
 
-    def chat_reply(self, player, situation, chat, speaker_name, text):
+    def chat_reply(self, player, situation, chat, speaker_name, text, addressed=None):
         try:
-            chat_txt = "\n".join('%s: "%s"' % (n, t) for n, t in chat[-10:])
+            if addressed == "you":
+                said = ('%s just spoke to YOU: "%s" — answer them.'
+                        % (speaker_name, text))
+            elif addressed:
+                said = ('%s just said to %s: "%s" — you\'re only overhearing this; '
+                        'chime in only if you have something worth adding.'
+                        % (speaker_name, addressed, text))
+            else:
+                said = '%s just said to the table: "%s"' % (speaker_name, text)
             messages = [
                 {"role": "system", "content": CHAT_SYSTEM_TEMPLATE.format(
                     name=player.name, style=self.p["style"])},
                 {"role": "user", "content":
-                    "%s\n\nRecent table talk:\n%s\n\n%s just said to the table: \"%s\"\n"
+                    "%s\n\nRecent table talk:\n%s\n\n%s\n"
                     "Your reply (one short line, or SILENT):"
-                    % (situation, chat_txt, speaker_name, text)},
+                    % (situation, format_chat(chat), said)},
             ]
             raw = self._create(messages, json_mode=False).strip()
             line = raw.splitlines()[0].strip().strip('"').strip() if raw else ""
@@ -360,7 +381,8 @@ class LLMBrain:
                 return None
             return line[:140]
         except Exception:
-            return self.fallback.chat_reply(player, situation, chat, speaker_name, text)
+            return self.fallback.chat_reply(player, situation, chat,
+                                            speaker_name, text, addressed)
 
     def _parse(self, raw, view):
         match = re.search(r"\{.*\}", raw, re.DOTALL)

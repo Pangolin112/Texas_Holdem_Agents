@@ -281,22 +281,61 @@ def test_rebuy_adds_debt_nobody_leaves():
     ok(p[1].debt == 0, "solvent players owe nothing")
 
 
+def talk_game(names, seed=11):
+    rng = random.Random(seed)
+    by_name = {p["name"]: p for p in PERSONALITIES}
+    players = [LLMPlayer(n, 1000, by_name[n], HeuristicBrain(by_name[n], rng))
+               for n in names]
+    return make_game(players, rng=rng), players
+
+
+def test_addressee_resolution():
+    game, p = talk_game(["Mike", "Sarah", "Emma", "Ray"])
+    mike, sarah, emma, ray = p
+    ok(game.resolve_addressee(mike, "nice bluff, Emma") == [emma],
+       "a name in the line resolves to that player")
+    ok(game.resolve_addressee(mike, "Ray, nice hand") == [ray],
+       "short names resolve too")
+    ok(game.resolve_addressee(mike, "that was crazy") == [],
+       "names inside other words don't count (crazy != Ray)")
+    ok(game.resolve_addressee(mike, "you guys are way too quiet") == [],
+       "group words mean the whole table")
+    game.chat = [("Sarah", None, "big talk from the small stack")]
+    ok(game.resolve_addressee(mike, "you wish") == [sarah],
+       "a bare 'you' resolves to whoever the speaker is answering")
+    ok(game.resolve_addressee(sarah, "what a night") == [],
+       "no cue means talking to the table")
+    got = game.resolve_addressee(ray, "Mike and Sarah, you two should slow down")
+    ok(set(x.name for x in got) == {"Mike", "Sarah"},
+       "several names resolve to several people")
+
+
 def test_table_talk_gets_replies():
-    rng = random.Random(11)
-    roster = PERSONALITIES[:3]
-    players = [LLMPlayer(pers["name"], 1000, pers, HeuristicBrain(pers, rng))
-               for pers in roster]
-    game = make_game(players, rng=rng)
+    game, players = talk_game(["Mike", "Sarah", "Emma"])
     speaker = players[0]
     game.table_talk(speaker, "you all play scared, especially you Sarah")
-    ok(game.chat[0] == (speaker.name, "you all play scared, especially you Sarah"),
-       "spoken line lands in the shared chat log")
-    repliers = {name for name, _ in game.chat[1:]}
-    ok("Sarah" in repliers, "an agent addressed by name answers")
-    ok(speaker.name not in repliers, "the speaker doesn't answer themselves")
+    entry = game.chat[0]
+    ok(entry == (speaker.name, "Sarah",
+                 "you all play scared, especially you Sarah"),
+       "the line is logged with the resolved addressee")
+    repliers = [name for name, _to, _text in game.chat[1:]]
+    ok("Sarah" in repliers, "the agent addressed by name answers")
+    ok(all(s != t for s, t, _x in game.chat), "nobody talks to themselves")
     game.hand_players = list(players)
     view = game.build_view(players[1])
     ok(view["chat"] == game.chat, "agents see the conversation in their view")
+
+
+def test_agents_answer_each_other():
+    game, players = talk_game(["Mike", "Sarah", "Emma"], seed=5)
+    mike = players[0]
+    # An agent (not the human) addresses another agent: she can answer him.
+    game.deliver_chat(mike, "Sarah, that raise of yours was ridiculous", in_action=True)
+    repliers = [name for name, _to, _text in game.chat[1:]]
+    ok("Sarah" in repliers, "an agent answers another agent, not just the human")
+    ok(len(game.chat) <= 6, "exchanges stay bounded — no infinite chatter")
+    for entry in game.chat:
+        ok(len(entry) == 3, "every chat entry carries speaker, addressee, text")
 
 
 # --------------------------------------------------------------- fuzz
@@ -335,6 +374,8 @@ if __name__ == "__main__":
     test_deal_fairness()
     test_system_random_games()
     test_rebuy_adds_debt_nobody_leaves()
+    test_addressee_resolution()
     test_table_talk_gets_replies()
+    test_agents_answer_each_other()
     test_fuzz_full_games()
     print("all good: %d checks passed" % CHECKS["passed"])

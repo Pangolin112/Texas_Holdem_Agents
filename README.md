@@ -46,8 +46,13 @@ On your turn:
 | `say nice try, robot` | chat with the table — the AIs hear you and answer back |
 | `h` | help, `q` — leave the table |
 
-You can chat during your turn or between hands; agents named in your message
-always answer, and the whole conversation feeds into everyone's decisions.
+You can chat during your turn or between hands, and the game understands who
+you're talking to: name someone ("Sarah, nice bluff") and they answer; say
+"you" with no name and it resolves to whoever you're replying to (shown as
+"(to Sarah)" so you can see it understood); group words like "everyone" reach
+the whole table. Agents answer *anyone* — you or each other — so their own
+remarks can spark short exchanges between them, bounded so chatter never
+spirals. The whole addressed conversation feeds into everyone's decisions.
 
 Full no-limit rules: blinds, min-raise tracking, all-ins, split pots and
 side pots. Nobody is ever eliminated: whoever goes broke (you included) is
