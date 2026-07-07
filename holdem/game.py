@@ -148,17 +148,18 @@ class TexasHoldemGame:
         self.deliver_chat(speaker, text)
 
     def reaction_chance(self, desc):
+        # Kept low on purpose: every reaction is another model call to wait on.
         if "ALL-IN" in desc or "all-in" in desc:
-            return 0.5
+            return 0.22
         if desc.startswith(("raises", "bets")):
-            return 0.25
+            return 0.10
         if desc.startswith("calls"):
-            return 0.08
-        return 0.05  # checks, folds
+            return 0.03
+        return 0.015  # checks, folds
 
     def react_to_event(self, actor, event, chance):
-        """Sometimes a bystander comments on a move or a result. The comment
-        goes through deliver_chat, so whoever it addresses can answer back."""
+        """Once in a while a single bystander drops a one-off comment on a move
+        or result. It's a one-shot — nobody replies to it — to keep the pace up."""
         if self.rng.random() >= chance:
             return
         candidates = [pl for pl in self.players
@@ -169,12 +170,12 @@ class TexasHoldemGame:
         line = reactor.brain.react(reactor, self.chat_situation(reactor),
                                    list(self.chat), event)
         if line:
-            self.deliver_chat(reactor, line, in_action=True)
+            self.deliver_chat(reactor, line, in_action=True, solicit=False)
 
-    def deliver_chat(self, speaker, text, in_action=False, depth=0):
-        """Record one chat line, resolve whom it addresses, show it, and let
-        the addressed players answer — whoever spoke, human or agent. Depth
-        keeps an exchange bounded so conversations never spiral."""
+    def deliver_chat(self, speaker, text, in_action=False, solicit=True):
+        """Record one chat line, resolve whom it addresses, and show it. When
+        `solicit`, let at most ONE player answer (and that answer does not draw
+        another) so a single remark never balloons into many model calls."""
         text = text.strip()[:140]
         if not text:
             return
@@ -183,24 +184,23 @@ class TexasHoldemGame:
         self.chat.append((speaker.name, to_name, text))
         self.chat = self.chat[-12:]
         ui.chat_line(speaker.name, text, to_name)
-        if depth >= 2:
+        if not solicit:
             return
-        responders = [p for p in addressees if hasattr(p, "brain")]
-        if depth == 0 and not in_action:
-            # A line to the whole table draws a couple of voices at random.
+        responder = next((p for p in addressees if hasattr(p, "brain")), None)
+        if responder is None and not in_action:
+            # A line to the whole table: one random voice may answer, no more.
             others = [p for p in self.players
-                      if p is not speaker and hasattr(p, "brain") and p not in responders]
+                      if p is not speaker and hasattr(p, "brain")]
             self.rng.shuffle(others)
-            responders += others[:max(0, 2 - len(responders))]
-        for p in responders[:3]:
-            if p in addressees:
-                addressed = "you"
-            else:
-                addressed = to_name  # overhearing someone else's exchange
-            reply = p.brain.chat_reply(p, self.chat_situation(p), list(self.chat),
-                                       speaker.name, text, addressed)
-            if reply:
-                self.deliver_chat(p, reply, in_action=in_action, depth=depth + 1)
+            responder = others[0] if others else None
+        if responder is None:
+            return
+        addressed = "you" if responder in addressees else to_name
+        reply = responder.brain.chat_reply(responder, self.chat_situation(responder),
+                                           list(self.chat), speaker.name, text, addressed)
+        if reply:
+            # The reply is a dead end — it doesn't itself provoke a response.
+            self.deliver_chat(responder, reply, in_action=in_action, solicit=False)
 
     def chat_situation(self, p):
         if self.hand_live:
@@ -464,7 +464,7 @@ class TexasHoldemGame:
                            % (self.hand_no, winner.name, total))
         self.memory = self.memory[-8:]
         self.react_to_event(winner, "%s just won the pot of %d because everyone folded."
-                            % (winner.name, total), 0.3)
+                            % (winner.name, total), 0.12)
 
     def showdown(self):
         contenders = [p for p in self.hand_players if p.in_hand]
@@ -477,9 +477,8 @@ class TexasHoldemGame:
         if summaries:
             self.memory.append("Hand %d: %s" % (self.hand_no, summaries[0]))
             self.memory = self.memory[-8:]
-            # Showdowns are worth talking about — anyone may pipe up,
-            # winner gloating included.
-            self.react_to_event(None, "Showdown result: %s" % summaries[0], 0.45)
+            # A showdown occasionally gets a word — kept rare for speed.
+            self.react_to_event(None, "Showdown result: %s" % summaries[0], 0.2)
 
     def award_pots(self, contenders, results):
         """Split the money into main/side pots and pay the winners.

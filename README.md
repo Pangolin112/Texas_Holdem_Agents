@@ -49,12 +49,11 @@ You can chat during your turn or between hands, and the game understands who
 you're talking to: name someone ("Sarah, nice bluff") and they answer; say
 "you" with no name and it resolves to whoever you're replying to (shown as
 "(to Sarah)" so you can see it understood); group words like "everyone" reach
-the whole table. Agents answer *anyone* — you or each other — so their own
-remarks can spark short exchanges between them, bounded so chatter never
-spirals. They also react to moves, not just words: all-ins and big raises
-(yours included) often draw a comment, quiet checks rarely, and showdown
-results get talked about too. The whole addressed conversation feeds into
-everyone's decisions.
+the whole table. To keep the pace up, each remark draws at most one reply and
+replies don't chain, so the table stays snappy instead of erupting into a
+round of back-and-forth. Agents also react to moves once in a while — a big
+all-in might get a word, most hands pass quietly. The addressed conversation
+still feeds into everyone's decisions.
 
 Full no-limit rules: blinds, min-raise tracking, all-ins, split pots and
 side pots. Nobody is ever eliminated: whoever goes broke (you included) is
