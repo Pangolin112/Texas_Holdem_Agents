@@ -70,7 +70,6 @@ class ScriptedPlayer(Player):
 
 def make_game(players, **kwargs):
     kwargs.setdefault("rng", random.Random(7))
-    kwargs.setdefault("fast", True)
     kwargs.setdefault("interactive", False)
     return TexasHoldemGame(players, **kwargs)
 
@@ -331,7 +330,7 @@ def test_system_random_games():
     roster = rng.sample(PERSONALITIES, 4)
     players = [LLMPlayer(pers["name"], 1000, pers, HeuristicBrain(pers, rng))
                for pers in roster]
-    game = TexasHoldemGame(players, rng=rng, fast=True, interactive=False)
+    game = TexasHoldemGame(players, rng=rng, interactive=False)
     game.run(max_hands=15)
     total = sum(pl.stack for pl in game.players)
     debts = sum(pl.debt for pl in game.players)
@@ -436,7 +435,7 @@ def test_fuzz_full_games():
         roster = rng.sample(PERSONALITIES, n)
         players = [LLMPlayer(pers["name"], 1000, pers, HeuristicBrain(pers, rng))
                    for pers in roster]
-        game = TexasHoldemGame(players, rng=rng, fast=True, interactive=False)
+        game = TexasHoldemGame(players, rng=rng, interactive=False)
         buyins = n * 1000
         for _ in range(60):
             game.play_hand()

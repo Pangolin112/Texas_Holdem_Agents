@@ -30,7 +30,6 @@ Options:
 | `--sb N` / `--bb N` | blinds (default 10/20) |
 | `--model NAME` | OpenAI model (default `gpt-5-mini`, or `$OPENAI_MODEL`) |
 | `--offline` | no API — opponents use built-in bot logic |
-| `--fast` | skip the dramatic pauses |
 | `--seed N` | reproducible shuffles |
 
 ## At the table

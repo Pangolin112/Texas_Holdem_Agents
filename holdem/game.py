@@ -2,7 +2,6 @@
 
 import random
 import re
-import time
 
 from . import evaluator, ui
 from .cards import Deck
@@ -10,12 +9,11 @@ from .players import Action, ALL_IN, CALL, CHECK, FOLD, RAISE
 
 
 class TexasHoldemGame:
-    def __init__(self, players, sb=10, bb=20, rng=None, fast=False, interactive=True):
+    def __init__(self, players, sb=10, bb=20, rng=None, interactive=True):
         self.players = list(players)  # seat order; only players with chips
         self.sb = sb
         self.bb = bb
         self.rng = rng if rng is not None else random.SystemRandom()
-        self.fast = fast
         self.interactive = interactive
         self.starting_stack = players[0].stack if players else 0
         self.button_idx = 0
@@ -34,10 +32,6 @@ class TexasHoldemGame:
         self.hand_live = False
 
     # ------------------------------------------------------------------ util
-
-    def pause(self, seconds=0.8):
-        if not self.fast:
-            time.sleep(seconds)
 
     @property
     def human(self):
@@ -104,7 +98,6 @@ class TexasHoldemGame:
             p.stack = self.starting_stack
             line = None if p.is_human else getattr(p, "personality", {}).get("broke_line")
             ui.announce_rebuy(p, self.starting_stack, p.debt, line)
-            self.pause(0.6)
 
     # ------------------------------------------------------------- table talk
 
@@ -207,7 +200,6 @@ class TexasHoldemGame:
             reply = p.brain.chat_reply(p, self.chat_situation(p), list(self.chat),
                                        speaker.name, text, addressed)
             if reply:
-                self.pause(0.5)
                 self.deliver_chat(p, reply, in_action=in_action, depth=depth + 1)
 
     def chat_situation(self, p):
@@ -287,7 +279,6 @@ class TexasHoldemGame:
                 self.board.extend(deck.draw(count))
                 self.new_street()
                 ui.street_banner(street, self.board, self.pot_total())
-                self.pause(1.0)
                 if not self.betting_round((self.button_idx + 1) % n):
                     return
             self.showdown()
@@ -307,7 +298,6 @@ class TexasHoldemGame:
         if len(in_hand) >= 2 and len(actionable) <= 1:
             self.revealed = True
             ui.reveal_hands(in_hand)
-            self.pause(1.2)
 
     # ------------------------------------------------------------- betting
 
@@ -354,8 +344,6 @@ class TexasHoldemGame:
                 # move, the more likely someone has something to say about it.
                 self.react_to_event(p, "%s %s." % (p.name, desc),
                                     self.reaction_chance(desc))
-            if not p.is_human:
-                self.pause(0.6)
             if reopened:
                 acted = set()
             acted.add(p)
@@ -477,13 +465,11 @@ class TexasHoldemGame:
         self.memory = self.memory[-8:]
         self.react_to_event(winner, "%s just won the pot of %d because everyone folded."
                             % (winner.name, total), 0.3)
-        self.pause(1.0)
 
     def showdown(self):
         contenders = [p for p in self.hand_players if p.in_hand]
         results = {p: evaluator.best_hand(p.hole + self.board) for p in contenders}
         ui.show_showdown(contenders, results, self.revealed)
-        self.pause(1.2)
 
         summaries = self.award_pots(contenders, results)
         for text in summaries:
@@ -494,7 +480,6 @@ class TexasHoldemGame:
             # Showdowns are worth talking about — anyone may pipe up,
             # winner gloating included.
             self.react_to_event(None, "Showdown result: %s" % summaries[0], 0.45)
-        self.pause(1.2)
 
     def award_pots(self, contenders, results):
         """Split the money into main/side pots and pay the winners.

@@ -46,7 +46,6 @@ def parse_args():
                         help="OpenAI model (default: $OPENAI_MODEL or %s)" % DEFAULT_MODEL)
     parser.add_argument("--offline", action="store_true",
                         help="play without the OpenAI API (built-in bot logic)")
-    parser.add_argument("--fast", action="store_true", help="skip the dramatic pauses")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
     return parser.parse_args()
 
@@ -108,7 +107,7 @@ def main():
         print(ui.dim(" deck: cryptographically random shuffle (OS entropy)"))
     print(ui.dim(" Type 'h' on your turn for the commands. Good luck.\n"))
 
-    game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng, fast=args.fast)
+    game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng)
     try:
         game.run()
     except (QuitGame, KeyboardInterrupt):
