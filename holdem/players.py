@@ -27,6 +27,7 @@ class Player:
     def __init__(self, name, stack):
         self.name = name
         self.stack = stack
+        self.debt = 0  # chips borrowed from the house via rebuys
         self.hole = []
         self.folded = False
         self.all_in = False
@@ -54,7 +55,6 @@ class HumanPlayer(Player):
 
     def decide(self, view):
         ui.show_table(view)
-        pending_say = None
         while True:
             raw = ui.safe_input(" your move (h for help) > ").strip()
             low = raw.lower()
@@ -65,8 +65,7 @@ class HumanPlayer(Player):
             if low.startswith("say"):
                 text = raw[3:].strip()
                 if text:
-                    pending_say = text[:100]
-                    ui.out(ui.dim("   (you'll say that along with your action)"))
+                    view["broadcast"](text)  # heard immediately; the table answers
                 else:
                     ui.out(ui.dim("   usage: say <something>"))
                 continue
@@ -78,16 +77,16 @@ class HumanPlayer(Player):
             if low in ("f", "fold"):
                 if view["to_call"] == 0:
                     ui.out(ui.dim("   (nothing to call — checking instead of folding)"))
-                    return Action(CHECK), pending_say
-                return Action(FOLD), pending_say
+                    return Action(CHECK), None
+                return Action(FOLD), None
             if low in ("", "c", "k", "check", "call"):
                 if low == "" and view["to_call"] > 0:
                     ui.out(ui.dim("   facing a bet of %d — type c to call, f to fold"
                                   % view["to_call"]))
                     continue
-                return Action(CALL if view["to_call"] > 0 else CHECK), pending_say
+                return Action(CALL if view["to_call"] > 0 else CHECK), None
             if low in ("a", "all", "allin", "all-in"):
-                return Action(ALL_IN), pending_say
+                return Action(ALL_IN), None
             if low.startswith("r") or low.startswith("bet"):
                 rest = "".join(ch for ch in low if ch.isdigit())
                 if not rest:
@@ -99,12 +98,12 @@ class HumanPlayer(Player):
                     ui.out(ui.dim("   you can't raise here — only call, fold or all-in"))
                     continue
                 if amount >= view["max_raise_to"]:
-                    return Action(ALL_IN), pending_say
+                    return Action(ALL_IN), None
                 if amount < view["min_raise_to"]:
                     ui.out(ui.dim("   minimum raise is to %d (or 'a' for all-in)"
                                   % view["min_raise_to"]))
                     continue
-                return Action(RAISE, amount), pending_say
+                return Action(RAISE, amount), None
             ui.out(ui.dim("   didn't catch that — h for help"))
 
 

@@ -16,7 +16,7 @@ from holdem.game import TexasHoldemGame
 from holdem.players import HumanPlayer, LLMPlayer
 from holdem.ui import QuitGame
 
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "gpt-5-mini"
 
 
 def load_dotenv():

@@ -30,6 +30,7 @@ class TexasHoldemGame:
         self.history = []  # list of (street, text)
         self.chat = []     # list of (name, text)
         self.revealed = False
+        self.hand_live = False
 
     # ------------------------------------------------------------------ util
 
@@ -62,56 +63,103 @@ class TexasHoldemGame:
     # ------------------------------------------------------------- main loop
 
     def run(self, max_hands=None):
-        while len(self.players) >= 2:
+        if len(self.players) < 2:
+            return
+        while True:
             self.play_hand()
-            if not self.remove_busted():
-                break  # human left the game or is broke and declined a rebuy
+            self.handle_rebuys()
             if max_hands is not None and self.hand_no >= max_hands:
                 break
-            if len(self.players) < 2:
+            if self.interactive and not self.between_hands():
                 break
-            if self.interactive:
-                ui.show_standings(self.players)
-                answer = ui.safe_input("\n [Enter] deal the next hand · q to quit > ").strip().lower()
-                if answer in ("q", "quit", "exit"):
-                    break
             self.button_idx = (self.button_idx + 1) % len(self.players)
+        ui.show_standings(self.players, "final standings")
 
-        human = self.human
-        if human is not None and self.interactive:
-            if len(self.players) == 1 and self.players[0] is human:
-                ui.victory()
-        ui.show_standings(self.players, "final chip counts")
+    def between_hands(self):
+        """Standings and chat between hands. Returns False to end the game."""
+        ui.show_standings(self.players)
+        while True:
+            answer = ui.safe_input(
+                "\n [Enter] next hand · say <text> to chat · q to quit > ").strip()
+            low = answer.lower()
+            if low in ("q", "quit", "exit"):
+                return False
+            if low.startswith("say"):
+                text = answer[3:].strip()
+                if text:
+                    self.table_talk(self.human, text)
+                else:
+                    ui.out(ui.dim("   usage: say <something>"))
+                continue
+            return True
 
-    def remove_busted(self):
-        """Drop broke players. Returns False if the game should end."""
-        for p in list(self.players):
+    def handle_rebuys(self):
+        """Nobody leaves the table: broke players are restaked by the house
+        and the loan goes on their tab."""
+        for p in self.players:
             if p.stack > 0:
                 continue
-            if p.is_human and self.interactive:
-                answer = ui.safe_input(
-                    "\n You're felted! Rebuy for %d chips? [y/N] " % self.starting_stack
-                ).strip().lower()
-                if answer in ("y", "yes"):
-                    p.stack = self.starting_stack
-                    ui.out(ui.dim(" %s reloads %d chips." % (p.name, self.starting_stack)))
-                    continue
-                ui.game_over()
-                return False
-            farewell = getattr(p, "personality", {}).get("farewell")
-            ui.announce_elimination(p, farewell)
-            self.players.remove(p)
-        if self.interactive and self.human is None:
-            return False
-        return True
+            p.debt += self.starting_stack
+            p.stack = self.starting_stack
+            line = None if p.is_human else getattr(p, "personality", {}).get("broke_line")
+            ui.announce_rebuy(p, self.starting_stack, p.debt, line)
+            self.pause(0.6)
+
+    # ------------------------------------------------------------- table talk
+
+    def table_talk(self, speaker, text):
+        """Broadcast a chat line and let a few AIs answer immediately."""
+        text = text.strip()[:140]
+        self.chat.append((speaker.name, text))
+        self.chat = self.chat[-12:]
+        ais = [p for p in self.players if p is not speaker and hasattr(p, "brain")]
+        lower = text.lower()
+        mentioned = [p for p in ais
+                     if any(len(w) >= 3 and w.lower() != "the" and w.lower() in lower
+                            for w in p.name.split())]
+        others = [p for p in ais if p not in mentioned]
+        self.rng.shuffle(others)
+        responders = (mentioned + others[:max(0, 2 - len(mentioned))])[:3]
+        for p in responders:
+            reply = p.brain.chat_reply(p, self.chat_situation(p), list(self.chat),
+                                       speaker.name, text)
+            if reply:
+                self.chat.append((p.name, reply))
+                self.chat = self.chat[-12:]
+                ui.chat_line(p.name, reply)
+                self.pause(0.5)
+
+    def chat_situation(self, p):
+        if self.hand_live:
+            board_txt = " ".join(str(c) for c in self.board) if self.board else "(none)"
+            parts = ["Hand #%d, street %s, board: %s, pot: %d."
+                     % (self.hand_no, self.street, board_txt, self.pot_total())]
+            if p in self.hand_players and p.folded:
+                parts.append("You have folded this hand.")
+            elif p in self.hand_players and p.hole:
+                parts.append("Your hole cards (secret): %s."
+                             % " ".join(str(c) for c in p.hole))
+        else:
+            parts = ["Between hands (hand #%d just ended)." % self.hand_no]
+        parts.append("Your stack: %d." % p.stack)
+        if p.debt:
+            parts.append("Your debt to the house: %d." % p.debt)
+        return " ".join(parts)
 
     # ------------------------------------------------------------- one hand
 
     def play_hand(self):
+        self.hand_live = True
+        try:
+            self._play_hand()
+        finally:
+            self.hand_live = False
+
+    def _play_hand(self):
         self.hand_no += 1
         self.board = []
         self.history = []
-        self.chat = []
+        # self.chat deliberately persists across hands: conversation continues.
         self.revealed = False
         self.hand_players = list(self.players)
         for p in self.hand_players:
@@ -289,7 +337,7 @@ class TexasHoldemGame:
         can_raise = max_to > self.current_bet and p.stack > to_call
 
         hint = None
-        if p.is_human and board:
+        if board and p.hole:
             rank, _ = evaluator.best_hand(p.hole + board)
             hint = evaluator.hand_name(rank)
 
@@ -298,6 +346,7 @@ class TexasHoldemGame:
             players_info.append({
                 "name": pl.name,
                 "stack": pl.stack,
+                "debt": pl.debt,
                 "bet_street": pl.bet_street,
                 "folded": pl.folded,
                 "all_in": pl.all_in,
@@ -328,6 +377,7 @@ class TexasHoldemGame:
             "history": list(self.history),
             "chat": list(self.chat),
             "memory": list(self.memory),
+            "broadcast": lambda text: self.table_talk(p, text),
         }
 
     # ------------------------------------------------------------- payouts

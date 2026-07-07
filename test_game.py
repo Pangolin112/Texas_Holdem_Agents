@@ -262,7 +262,41 @@ def test_system_random_games():
     game = TexasHoldemGame(players, rng=rng, fast=True, interactive=False)
     game.run(max_hands=15)
     total = sum(pl.stack for pl in game.players)
-    ok(total == 4000, "chips conserved across SystemRandom-shuffled hands")
+    debts = sum(pl.debt for pl in game.players)
+    ok(total == 4000 + debts, "chips = buy-ins + house loans across SystemRandom hands")
+
+
+# --------------------------------------------------------------- rebuys & chat
+
+def test_rebuy_adds_debt_nobody_leaves():
+    p = [Player("A", 1000), Player("B", 1000)]
+    game = make_game(p)
+    p[0].stack = 0
+    game.handle_rebuys()
+    ok(p[0].stack == 1000 and p[0].debt == 1000, "broke player restaked, loan on the tab")
+    ok(len(game.players) == 2, "nobody is removed from the table")
+    p[0].stack = 0
+    game.handle_rebuys()
+    ok(p[0].debt == 2000, "debts accumulate across rebuys")
+    ok(p[1].debt == 0, "solvent players owe nothing")
+
+
+def test_table_talk_gets_replies():
+    rng = random.Random(11)
+    roster = PERSONALITIES[:3]
+    players = [LLMPlayer(pers["name"], 1000, pers, HeuristicBrain(pers, rng))
+               for pers in roster]
+    game = make_game(players, rng=rng)
+    speaker = players[0]
+    game.table_talk(speaker, "you all play scared, especially you Ivy")
+    ok(game.chat[0] == (speaker.name, "you all play scared, especially you Ivy"),
+       "spoken line lands in the shared chat log")
+    repliers = {name for name, _ in game.chat[1:]}
+    ok("Ivy" in repliers, "an agent addressed by name answers")
+    ok(speaker.name not in repliers, "the speaker doesn't answer themselves")
+    game.hand_players = list(players)
+    view = game.build_view(players[1])
+    ok(view["chat"] == game.chat, "agents see the conversation in their view")
 
 
 # --------------------------------------------------------------- fuzz
@@ -275,17 +309,16 @@ def test_fuzz_full_games():
         players = [LLMPlayer(pers["name"], 1000, pers, HeuristicBrain(pers, rng))
                    for pers in roster]
         game = TexasHoldemGame(players, rng=rng, fast=True, interactive=False)
-        total = n * 1000
+        buyins = n * 1000
         for _ in range(60):
-            if len(game.players) < 2:
-                break
             game.play_hand()
             got = sum(pl.stack for pl in game.players)
-            assert got == total, ("seed %d hand %d: chips %d != %d"
-                                  % (seed, game.hand_no, got, total))
-            game.remove_busted()
-            game.button_idx = (game.button_idx + 1) % len(game.players) if game.players else 0
-    ok(True, "30 seeded multi-hand games: chips conserved, no crashes")
+            debts = sum(pl.debt for pl in game.players)
+            assert got == buyins + debts, ("seed %d hand %d: chips %d != buyins %d + debts %d"
+                                           % (seed, game.hand_no, got, buyins, debts))
+            game.handle_rebuys()
+            game.button_idx = (game.button_idx + 1) % len(game.players)
+    ok(True, "30 seeded multi-hand games: chips always equal buy-ins plus house loans")
 
 
 if __name__ == "__main__":
@@ -301,5 +334,7 @@ if __name__ == "__main__":
     test_deck_integrity()
     test_deal_fairness()
     test_system_random_games()
+    test_rebuy_adds_debt_nobody_leaves()
+    test_table_talk_gets_replies()
     test_fuzz_full_games()
     print("all good: %d checks passed" % CHECKS["passed"])

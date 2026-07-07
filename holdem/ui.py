@@ -93,10 +93,14 @@ def street_banner(street, board, pot):
     out(" %s   board: %s   %s" % (bold("── " + street + " ──"), board_txt, _c(C.YELLOW, "pot %d" % pot)))
 
 
+def chat_line(name, text):
+    out(_c(C.MAGENTA, '      %s: "%s"' % (name, text)))
+
+
 def announce_action(player, desc, say=None):
     out("   %s %s." % (name_str(player), desc))
     if say:
-        out(_c(C.MAGENTA, '      %s: "%s"' % (player.name, say)))
+        chat_line(player.name, say)
 
 
 def thinking(name):
@@ -145,7 +149,7 @@ def show_help():
     out(dim("   c            check (if free) / call"))
     out(dim("   r <amount>   raise TO <amount> total this street, e.g. 'r 120'"))
     out(dim("   a            all-in"))
-    out(dim("   say <text>   table talk — the AIs will hear it (sent with your action)"))
+    out(dim("   say <text>   chat with the table — they hear you and answer"))
     out(dim("   q            leave the table"))
 
 
@@ -169,25 +173,19 @@ def announce_pot(text):
     out(_c(C.YELLOW, "   ● " + text))
 
 
-def announce_elimination(player, farewell=None):
+def announce_rebuy(player, stake, debt, line=None):
     out()
-    out(_c(C.RED, " ✖ %s is out of chips and leaves the table." % player.name))
-    if farewell:
-        out(_c(C.MAGENTA, '      %s: "%s"' % (player.name, farewell)))
+    out(_c(C.YELLOW, " $ %s is felted — the house stakes another %d (tab now %d)."
+           % (player.name, stake, debt)))
+    if line:
+        chat_line(player.name, line)
 
 
-def show_standings(players, title="chip counts"):
+def show_standings(players, title="standings"):
     out()
     out(dim(" %s:" % title))
-    for p in sorted(players, key=lambda x: -x.stack):
-        out("   %s %s" % (name_str(p).ljust(24), ("$%d" % p.stack).rjust(7)))
-
-
-def victory():
-    out()
-    out(_c(C.YELLOW, " ★ ★ ★  YOU CLEANED OUT THE WHOLE TABLE OF MACHINES!  ★ ★ ★"))
-
-
-def game_over():
-    out()
-    out(_c(C.RED, " The machines took everything. Better luck next time, human."))
+    for p in sorted(players, key=lambda x: -(x.stack - x.debt)):
+        debt_txt = ""
+        if p.debt:
+            debt_txt = dim("   debt %d · net %+d" % (p.debt, p.stack - p.debt))
+        out("   %s %s%s" % (name_str(p).ljust(24), ("$%d" % p.stack).rjust(7), debt_txt))

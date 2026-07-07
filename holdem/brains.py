@@ -23,7 +23,7 @@ PERSONALITIES = [
         "aggression": 0.85, "looseness": 0.70,
         "taunts": ["Saddle up, this pot's mine!", "Y'all fold faster than a lawn chair.",
                    "I've seen scarier bets at a church raffle."],
-        "farewell": "This town ain't big enough for my losses...",
+        "broke_line": "Put it on my tab, partner — I'm good for it!",
     },
     {
         "name": "Ivy",
@@ -31,7 +31,7 @@ PERSONALITIES = [
                   "folds without regret, speaks in odds and clipped one-liners."),
         "aggression": 0.45, "looseness": 0.25,
         "taunts": ["Your line is -EV.", "P(you're bluffing) = 0.73.", "Variance is not a strategy."],
-        "farewell": "Statistically inevitable. Goodbye.",
+        "broke_line": "A temporary liquidity event. The expected value remains mine.",
     },
     {
         "name": "Rusty",
@@ -40,7 +40,7 @@ PERSONALITIES = [
         "aggression": 0.25, "looseness": 0.85,
         "taunts": ["The tide's turnin', I feel it in me knee.", "I once folded a flush. Never again.",
                    "Seagull told me to call."],
-        "farewell": "The sea giveth, the river taketh away...",
+        "broke_line": "Bad tide tonight... lend ol' Rusty another stack, cap'n.",
     },
     {
         "name": "Nova",
@@ -48,7 +48,7 @@ PERSONALITIES = [
                   "all-ins, strange lines. Talks in lowercase memes."),
         "aggression": 0.70, "looseness": 0.60,
         "taunts": ["gg ez", "this is not a bluff (it might be)", "rngesus take the wheel"],
-        "farewell": "rage quit. uninstalling reality.",
+        "broke_line": "respawning with borrowed gold lol",
     },
     {
         "name": "The Professor",
@@ -57,7 +57,7 @@ PERSONALITIES = [
         "aggression": 0.55, "looseness": 0.40,
         "taunts": ["Textbook exploit, take notes.", "Your range is capped, I'm afraid.",
                    "This will be on the exam."],
-        "farewell": "Class dismissed. Permanently, it seems.",
+        "broke_line": "A variance-induced downswing. Note the loan in the ledger, please.",
     },
     {
         "name": "Lucky Lin",
@@ -65,7 +65,7 @@ PERSONALITIES = [
                   "connected cards, chases every draw, celebrates loudly."),
         "aggression": 0.50, "looseness": 0.90,
         "taunts": ["Fortune favors ME today!", "I never fold on a Tuesday.", "My horoscope said all-in."],
-        "farewell": "Fate is just saving my luck for tomorrow!",
+        "broke_line": "Destiny says: double or nothing!",
     },
     {
         "name": "Dmitri",
@@ -73,7 +73,7 @@ PERSONALITIES = [
                   "chips in, he means it... usually."),
         "aggression": 0.65, "looseness": 0.30,
         "taunts": ["...", "Is problem?", "Da."],
-        "farewell": "Is fine. Was only money.",
+        "broke_line": "Add to bill.",
     },
 ]
 
@@ -138,8 +138,8 @@ class HeuristicBrain:
         can_raise = view["can_raise"]
         bb = view["blinds"][1]
 
-        # Short stack: shove or fold.
-        if player.stack <= 6 * bb and strength > 0.55 - (loose - 0.5) * 0.2:
+        # Short stack: shove or fold, but only with a real hand.
+        if player.stack <= 6 * bb and strength > 0.62 - (loose - 0.5) * 0.1:
             return Action(ALL_IN), say
 
         if to_call == 0:
@@ -147,15 +147,18 @@ class HeuristicBrain:
             if can_raise and (urge > 0.62 or rng.random() < aggr * 0.12):
                 target = int(pot * (0.5 + rng.random() * 0.7))
                 target = max(min_to, min(max(target, bb), max_to))
-                if strength > 0.9 and rng.random() < aggr * 0.4:
+                if strength > 0.92 and rng.random() < aggr * 0.25:
                     return Action(ALL_IN), say
                 return Action(RAISE, target), say
             return Action(CHECK), say
 
         pot_odds = to_call / float(pot + to_call)
         eff = strength + (loose - 0.5) * 0.22
+        # Facing a huge bet, only a genuinely strong hand continues.
+        if to_call >= max(player.stack // 2, 4 * bb) and eff < 0.75:
+            return Action(FOLD), None
         if eff > pot_odds + 0.28 and can_raise and rng.random() < aggr:
-            if strength > 0.88 and rng.random() < aggr * 0.5:
+            if strength > 0.92 and rng.random() < aggr * 0.35:
                 return Action(ALL_IN), say
             target = int((pot + to_call) * (0.8 + rng.random() * 0.7))
             target = max(min_to, min(target, max_to))
@@ -166,6 +169,11 @@ class HeuristicBrain:
         if to_call <= bb and rng.random() < loose * 0.5:
             return Action(CALL), say
         return Action(FOLD), None
+
+    def chat_reply(self, player, situation, chat, speaker_name, text):
+        if self.rng.random() < 0.85:
+            return self.rng.choice(self.p["taunts"])
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +186,8 @@ Your personality: {style}
 
 Play genuinely good poker filtered through that personality: weigh your hand strength, pot odds, position, stack sizes, and how each opponent has been acting this session. Bluff when it fits your style, and vary your bet sizes so you stay unpredictable.
 
+Discipline matters more than flair: going all-in, or calling one, demands a genuinely strong hand or overwhelming pot odds — folding weak hands to big bets is what winners do. Do not spew chips on hopeless holdings just to look bold; even the wildest personality wants to WIN.
+
 Respond with ONE JSON object and nothing else:
 {{"action": "fold" | "check" | "call" | "raise" | "all_in", "raise_to": <integer, required only for "raise">, "say": "<short in-character table talk, max 15 words, or empty string>"}}
 
@@ -185,7 +195,15 @@ Hard rules:
 - "raise_to" is the TOTAL amount of your bet for this street, not the increment.
 - Never state your actual hole cards in "say" (lying about them is allowed and encouraged).
 - Keep "say" fresh — don't repeat lines you've used before. Staying silent ("") is fine.
-- Only "check" when there is nothing to call."""
+- Only "check" when there is nothing to call.
+- If another player spoke to you in the table talk, feel free to answer them in "say"."""
+
+
+CHAT_SYSTEM_TEMPLATE = """You are {name}, an AI player in a lively No-Limit Texas Hold'em home game.
+
+Your personality: {style}
+
+Someone at the table is talking to you (or to everyone). Answer with ONE short line of in-character table talk — max 20 words, no JSON, no quotes around it. Banter, needle, mislead, or joke as your personality would. Never reveal your actual hole cards (lying about them is fine). If you have nothing worth saying, reply with exactly: SILENT"""
 
 
 def format_history(history):
@@ -220,16 +238,23 @@ def build_user_prompt(player, view):
         else:
             status = "active, bet %d this street" % pl["bet_street"]
         tag_txt = (" [" + ", ".join(tags) + "]") if tags else ""
-        seats.append("- %s%s: stack %d — %s" % (pl["name"], tag_txt, pl["stack"], status))
+        debt_txt = (", debt to the house %d" % pl["debt"]) if pl.get("debt") else ""
+        seats.append("- %s%s: stack %d%s — %s" % (pl["name"], tag_txt, pl["stack"], debt_txt, status))
 
-    chat_txt = "\n".join('%s: "%s"' % (n, t) for n, t in view["chat"][-6:]) or "(quiet so far)"
+    chat_txt = "\n".join('%s: "%s"' % (n, t) for n, t in view["chat"][-10:]) or "(quiet so far)"
     memory_txt = "\n".join(view["memory"][-5:]) or "(this is the first hand)"
+
+    made_line = ""
+    if view.get("hero_hand_hint"):
+        made_line = "\nYour best five-card hand right now: %s." % view["hero_hand_hint"]
 
     if view["to_call"] == 0:
         call_line = "Nothing to call — you may check."
     else:
-        call_line = "To call: %d (folding costs nothing, calling costs %d)." % (
-            view["to_call"], min(view["to_call"], hero["stack"]))
+        odds = 100.0 * view["to_call"] / (view["pot"] + view["to_call"])
+        call_line = ("To call: %d (folding costs nothing, calling costs %d — "
+                     "pot odds: you need to win %.0f%% of the time to break even)." % (
+                         view["to_call"], min(view["to_call"], hero["stack"]), odds))
     if view["can_raise"]:
         raise_line = ("If you raise: minimum raise_to = %d, maximum raise_to = %d (all-in)."
                       % (view["min_raise_to"], view["max_raise_to"]))
@@ -238,7 +263,7 @@ def build_user_prompt(player, view):
 
     return """HAND #{hand_no} | Street: {street} | Blinds: {sb}/{bb}
 Your hole cards: {hole}
-Board: {board}
+Board: {board}{made_line}
 Pot: {pot}
 Your stack: {stack} (you've bet {bet_street} this street, {committed} total this hand)
 {call_line}
@@ -259,7 +284,7 @@ Earlier hands this session:
 What do you do? Respond with the JSON object only.""".format(
         hand_no=view["hand_no"], street=view["street"],
         sb=view["blinds"][0], bb=view["blinds"][1],
-        hole=hole_txt, board=board_txt, pot=view["pot"],
+        hole=hole_txt, board=board_txt, made_line=made_line, pot=view["pot"],
         stack=hero["stack"], bet_street=hero["bet_street"], committed=hero["committed"],
         call_line=call_line, raise_line=raise_line,
         seats="\n".join(seats), history=format_history(view["history"]),
@@ -288,21 +313,49 @@ class LLMBrain:
                 self._warned = True
             return self.fallback.decide(player, view)
 
+    def _create(self, messages, json_mode=True):
+        kwargs = {"model": self.model, "messages": messages}
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        if self.model.startswith(("gpt-5", "o1", "o3", "o4")):
+            # Reasoning models: low effort keeps decisions quick at the table.
+            kwargs["reasoning_effort"] = "low"
+        else:
+            kwargs["temperature"] = 1.0
+        try:
+            resp = self.client.chat.completions.create(**kwargs)
+        except Exception:
+            # Some models reject response_format / temperature / reasoning
+            # settings; retry once with the plain call before giving up.
+            resp = self.client.chat.completions.create(model=self.model, messages=messages)
+        return resp.choices[0].message.content or ""
+
     def _ask(self, player, view):
         messages = [
             {"role": "system",
              "content": SYSTEM_TEMPLATE.format(name=player.name, style=self.p["style"])},
             {"role": "user", "content": build_user_prompt(player, view)},
         ]
+        return self._create(messages)
+
+    def chat_reply(self, player, situation, chat, speaker_name, text):
         try:
-            resp = self.client.chat.completions.create(
-                model=self.model, messages=messages,
-                response_format={"type": "json_object"}, temperature=1.0)
+            chat_txt = "\n".join('%s: "%s"' % (n, t) for n, t in chat[-10:])
+            messages = [
+                {"role": "system", "content": CHAT_SYSTEM_TEMPLATE.format(
+                    name=player.name, style=self.p["style"])},
+                {"role": "user", "content":
+                    "%s\n\nRecent table talk:\n%s\n\n%s just said to the table: \"%s\"\n"
+                    "Your reply (one short line, or SILENT):"
+                    % (situation, chat_txt, speaker_name, text)},
+            ]
+            raw = self._create(messages, json_mode=False).strip()
+            line = raw.splitlines()[0].strip().strip('"').strip() if raw else ""
+            if not line or line.upper() == "SILENT":
+                return None
+            return line[:140]
         except Exception:
-            # Some models reject response_format and/or a temperature setting;
-            # retry once with the plain call before giving up.
-            resp = self.client.chat.completions.create(model=self.model, messages=messages)
-        return resp.choices[0].message.content or ""
+            return self.fallback.chat_reply(player, situation, chat, speaker_name, text)
 
     def _parse(self, raw, view):
         match = re.search(r"\{.*\}", raw, re.DOTALL)
