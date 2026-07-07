@@ -28,7 +28,7 @@ Options:
 | `--opponents N` | number of AI opponents, 1–7 (default 5) |
 | `--stack N` | starting stack (default 1000) |
 | `--sb N` / `--bb N` | blinds (default 10/20) |
-| `--model NAME` | OpenAI model (default `gpt-5-mini`, or `$OPENAI_MODEL`) |
+| `--model NAME` | preferred OpenAI model (default `gpt-5.2`, or `$OPENAI_MODEL`; auto-falls back if unavailable) |
 | `--offline` | no API — opponents use built-in bot logic |
 | `--seed N` | reproducible shuffles |
 
@@ -54,6 +54,13 @@ replies don't chain, so the table stays snappy instead of erupting into a
 round of back-and-forth. Agents also react to moves once in a while — a big
 all-in might get a word, most hands pass quietly. The addressed conversation
 still feeds into everyone's decisions.
+
+**Ask why.** Idle needling gets idle banter, but if you actually *question a
+move* — "Sarah, why did you raise there?", "Dave, explain that call" — the
+game recognizes it and that player walks you through the real reasoning: the
+board, pot odds and price, position, stacks, and what they were representing.
+(While a hand is still live they may keep their exact cards to themselves, but
+the logic they give is genuine, not a brush-off.)
 
 Full no-limit rules: blinds, min-raise tracking, all-ins, split pots and
 side pots. Nobody is ever eliminated: whoever goes broke (you included) is
@@ -96,8 +103,9 @@ game tells you at startup which mode is active. The test suite includes a
 20,000-deal distribution check confirming no seat gets better cards.
 
 **Cost note:** a 6-player hand makes roughly 15–25 small API calls (plus one
-per AI reply when you chat). `gpt-5-mini` keeps an evening of poker cheap;
-`--model gpt-4o-mini` is cheaper but plays worse, `--model gpt-5` is sharper.
+per AI reply when you chat, or one deeper call when you ask a seat to explain
+a move). The default `gpt-5.2` plays the sharpest; `--model gpt-5-mini` or
+`--model gpt-4o-mini` are cheaper if you'd rather spend less.
 
 ## Tests
 

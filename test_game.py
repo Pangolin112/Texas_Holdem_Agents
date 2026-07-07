@@ -3,9 +3,10 @@
 import random
 
 from holdem import evaluator, ui
-from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, spoken_action
+from holdem.brains import (PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain,
+                           spoken_action)
 from holdem.cards import Card, Deck, RANK_VALUES
-from holdem.game import TexasHoldemGame
+from holdem.game import TexasHoldemGame, looks_like_move_question
 from holdem.players import Action, LLMPlayer, Player, ALL_IN, CALL, CHECK, FOLD, RAISE
 
 ui.QUIET = True
@@ -426,6 +427,73 @@ def test_agents_answer_each_other():
         ok(len(entry) == 3, "every chat entry carries speaker, addressee, text")
 
 
+def test_move_question_detection():
+    ok(looks_like_move_question("why did you fold there?"), "'why did you fold' -> question")
+    ok(looks_like_move_question("Dave, explain that raise"), "'explain that raise' -> question")
+    ok(looks_like_move_question("what were you thinking"), "'what were you thinking' -> question")
+    ok(looks_like_move_question("how could you call that"), "'how could you call' -> question")
+    ok(looks_like_move_question("was that a bluff?"), "'a bluff?' (question + play word) -> question")
+    ok(not looks_like_move_question("nice hand"), "'nice hand' -> not a question")
+    ok(not looks_like_move_question("you got lucky, Sarah"), "a needle -> not a question")
+    ok(not looks_like_move_question("good game everyone"), "a pleasantry -> not a question")
+
+
+def test_questioning_a_move_gets_a_reasoned_answer():
+    game, players = talk_game(["Mike", "Sarah", "Emma"], seed=4)
+    asker = players[0]
+    game.deliver_chat(asker, "Sarah, why did you raise there?", in_action=True)
+    ok(game.chat[0][0] == asker.name, "the question is logged first")
+    reply = game.chat[-1]
+    ok(reply[0] == "Sarah", "the questioned seat is the one that explains")
+    ok(reply[1] == asker.name, "the explanation is addressed back to the asker")
+    ok(len(reply[2]) > 80, "the answer is a real, reasoned explanation, not a one-liner")
+    ok(len(game.chat) == 2, "a question draws exactly one explanation, no cascade")
+
+
+def test_needle_stays_banter_not_a_lecture():
+    game, players = talk_game(["Mike", "Sarah", "Emma"], seed=6)
+    asker = players[0]
+    game.deliver_chat(asker, "Sarah you got lucky there", in_action=True)
+    for _name, _to, text in game.chat[1:]:
+        ok(len(text) <= 140, "a plain needle gets short banter, not an explanation")
+
+
+def test_model_chain_and_fallback():
+    chain = ModelChain(["gpt-5.2", "gpt-5", "gpt-5.2", None])
+    ok(chain.models == ["gpt-5.2", "gpt-5"], "duplicates and blanks dropped, order kept")
+    ok(chain.current == "gpt-5.2", "starts at the preferred model")
+    ok(chain.downgrade() and chain.current == "gpt-5", "downgrades to the next model")
+    ok(not chain.downgrade(), "won't step past the last model")
+
+    calls = []
+
+    class FakeCompletions:
+        @staticmethod
+        def create(model=None, **kw):
+            calls.append(model)
+            if model == "gpt-5.2":
+                raise RuntimeError("The model `gpt-5.2` does not exist or you lack access")
+
+            class R:
+                class C:
+                    class M:
+                        content = '{"action": "call", "say": ""}'
+                    message = M
+                choices = [C]
+            return R
+
+    class FakeClient:
+        class chat:
+            completions = FakeCompletions()
+
+    ch = ModelChain(["gpt-5.2", "gpt-5"])
+    brain = LLMBrain(FakeClient(), ch, PERSONALITIES[0], random.Random(0))
+    out = brain._create([{"role": "user", "content": "x"}], json_mode=True)
+    ok("gpt-5.2" in calls and "gpt-5" in calls, "tried the preferred model, then the fallback")
+    ok(ch.current == "gpt-5", "the shared chain advanced to the working model")
+    ok('"action"' in out, "a real completion came back from the fallback model")
+
+
 # --------------------------------------------------------------- fuzz
 
 def test_fuzz_full_games():
@@ -468,5 +536,9 @@ if __name__ == "__main__":
     test_table_talk_gets_replies()
     test_move_reactions()
     test_agents_answer_each_other()
+    test_move_question_detection()
+    test_questioning_a_move_gets_a_reasoned_answer()
+    test_needle_stays_banter_not_a_lecture()
+    test_model_chain_and_fallback()
     test_fuzz_full_games()
     print("all good: %d checks passed" % CHECKS["passed"])

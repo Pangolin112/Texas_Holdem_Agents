@@ -11,12 +11,15 @@ import random
 import sys
 
 from holdem import ui
-from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain
+from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain
 from holdem.game import TexasHoldemGame
 from holdem.players import HumanPlayer, LLMPlayer
 from holdem.ui import QuitGame
 
-DEFAULT_MODEL = "gpt-5-mini"
+# Preferred model first; the rest are automatic fallbacks if the account
+# can't reach it, so a wrong/unavailable id never breaks the whole table.
+DEFAULT_MODEL = "gpt-5.2"
+FALLBACK_MODELS = ["gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-4o-mini"]
 
 
 def load_dotenv():
@@ -43,7 +46,8 @@ def parse_args():
     parser.add_argument("--sb", type=int, default=10, help="small blind (default 10)")
     parser.add_argument("--bb", type=int, default=20, help="big blind (default 20)")
     parser.add_argument("--model", default=None,
-                        help="OpenAI model (default: $OPENAI_MODEL or %s)" % DEFAULT_MODEL)
+                        help="preferred OpenAI model (default: $OPENAI_MODEL or %s; "
+                             "auto-falls back if unavailable)" % DEFAULT_MODEL)
     parser.add_argument("--offline", action="store_true",
                         help="play without the OpenAI API (built-in bot logic)")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
@@ -73,7 +77,8 @@ def main():
     ui.title_screen()
 
     client = None
-    model = args.model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+    chosen = args.model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+    model_chain = ModelChain([chosen] + FALLBACK_MODELS)
     if args.offline:
         print(ui.dim(" offline mode: opponents run on built-in instincts, no API calls.\n"))
     elif not os.environ.get("OPENAI_API_KEY"):
@@ -83,7 +88,8 @@ def main():
     else:
         from openai import OpenAI
         client = OpenAI(timeout=45.0, max_retries=2)
-        print(ui.dim(" opponents powered by OpenAI model: %s\n" % model))
+        print(ui.dim(" opponents powered by OpenAI model: %s (auto-fallback if unavailable)\n"
+                     % chosen))
 
     try:
         name = ui.safe_input(" What's your name, champ? [You] ").strip() or "You"
@@ -97,7 +103,7 @@ def main():
         if args.offline:
             brain = HeuristicBrain(personality, rng)
         else:
-            brain = LLMBrain(client, model, personality, rng)
+            brain = LLMBrain(client, model_chain, personality, rng)
         players.append(LLMPlayer(personality["name"], args.stack, personality, brain))
 
     print(" Tonight's table: " + ", ".join(ui.name_str(p) for p in players[1:]))

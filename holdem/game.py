@@ -7,6 +7,25 @@ from . import evaluator, ui
 from .cards import Deck
 from .players import Action, ALL_IN, CALL, CHECK, FOLD, RAISE
 
+# Phrases that mean "justify your play" rather than idle banter.
+_STRONG_QUESTION = ("why", "how come", "how could", "how can", "explain",
+                    "reasoning", "your logic", "justify", "what were you",
+                    "what made you", "walk me through", "what was that",
+                    "makes no sense", "make sense", "your thinking",
+                    "what are you thinking", "how is that")
+_PLAY_WORDS = ("move", "bet", "raise", "call", "fold", "check", "all in", "all-in",
+               "shove", "jam", "bluff", "play", "do that", "did that", "that for",
+               "line", "hand")
+
+
+def looks_like_move_question(text):
+    """True if `text` is questioning a decision (deserves a reasoned answer),
+    not just needling."""
+    low = text.lower()
+    if any(cue in low for cue in _STRONG_QUESTION):
+        return True
+    return "?" in low and any(w in low for w in _PLAY_WORDS)
+
 
 class TexasHoldemGame:
     def __init__(self, players, sb=10, bb=20, rng=None, interactive=True):
@@ -172,15 +191,20 @@ class TexasHoldemGame:
         if line:
             self.deliver_chat(reactor, line, in_action=True, solicit=False)
 
-    def deliver_chat(self, speaker, text, in_action=False, solicit=True):
+    def deliver_chat(self, speaker, text, in_action=False, solicit=True,
+                     force_to=None, max_len=140):
         """Record one chat line, resolve whom it addresses, and show it. When
         `solicit`, let at most ONE player answer (and that answer does not draw
         another) so a single remark never balloons into many model calls."""
-        text = text.strip()[:140]
+        text = " ".join(text.split())[:max_len]
         if not text:
             return
-        addressees = self.resolve_addressee(speaker, text)
-        to_name = addressees[0].name if len(addressees) == 1 else None
+        if force_to is not None:
+            addressees = [force_to]
+            to_name = force_to.name
+        else:
+            addressees = self.resolve_addressee(speaker, text)
+            to_name = addressees[0].name if len(addressees) == 1 else None
         self.chat.append((speaker.name, to_name, text))
         self.chat = self.chat[-12:]
         ui.chat_line(speaker.name, text, to_name)
@@ -194,6 +218,15 @@ class TexasHoldemGame:
             self.rng.shuffle(others)
             responder = others[0] if others else None
         if responder is None:
+            return
+        # Questioning a seat's own move earns a reasoned explanation, not banter.
+        if responder in addressees and looks_like_move_question(text):
+            answer = responder.brain.explain_move(
+                responder, self.explain_context(responder),
+                list(self.chat), speaker.name, text)
+            if answer:
+                self.deliver_chat(responder, answer, in_action=in_action,
+                                  solicit=False, force_to=speaker, max_len=500)
             return
         addressed = "you" if responder in addressees else to_name
         reply = responder.brain.chat_reply(responder, self.chat_situation(responder),
@@ -218,6 +251,37 @@ class TexasHoldemGame:
         if p.debt:
             parts.append("Your debt to the house: %d." % p.debt)
         return " ".join(parts)
+
+    def explain_context(self, p):
+        """Rich context for justifying a move: the state, this seat's own cards,
+        whether the hand is still live (so it knows if it may keep cards secret),
+        and the full action log to reason over."""
+        parts = []
+        if self.hand_live:
+            board_txt = " ".join(str(c) for c in self.board) if self.board else "(none)"
+            parts.append("Right now: hand #%d, %s, board %s, pot %d, your stack %d."
+                         % (self.hand_no, self.street, board_txt, self.pot_total(), p.stack))
+            parts.append("Your own hole cards: %s."
+                         % (" ".join(str(c) for c in p.hole) if p.hole else "(none dealt)"))
+            if p in self.hand_players and not p.folded:
+                parts.append("This hand is STILL LIVE and you're still in it — you may keep "
+                             "your exact cards to yourself, but your reasoning must be real.")
+            else:
+                parts.append("You're out of this hand now, so you can speak freely and honestly.")
+        else:
+            parts.append("The last hand (#%d) just finished — you can be fully honest about it."
+                         % self.hand_no)
+            if p.hole:
+                parts.append("Your cards were: %s." % " ".join(str(c) for c in p.hole))
+        parts.append("Action log of the hand:\n" + self._history_text())
+        if p.debt:
+            parts.append("Your debt to the house: %d." % p.debt)
+        return "\n".join(parts)
+
+    def _history_text(self):
+        if not self.history:
+            return "  (no betting action recorded yet)"
+        return "\n".join("  [%s] %s" % (street, text) for street, text in self.history)
 
     # ------------------------------------------------------------- one hand
 

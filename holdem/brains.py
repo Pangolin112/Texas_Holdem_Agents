@@ -15,6 +15,42 @@ from .cards import Card  # noqa: F401
 from . import evaluator
 from .players import Action, FOLD, CHECK, CALL, RAISE, ALL_IN
 
+
+class ModelChain:
+    """A preferred model plus fallbacks. If the chosen model isn't available on
+    the account, the game steps down to the next one instead of breaking. One
+    shared instance is passed to every seat so a downgrade happens only once."""
+
+    def __init__(self, models):
+        seen = []
+        for m in models:
+            if m and m not in seen:
+                seen.append(m)
+        self.models = seen or ["gpt-5-mini"]
+        self.idx = 0
+
+    @property
+    def current(self):
+        return self.models[self.idx]
+
+    def downgrade(self):
+        if self.idx < len(self.models) - 1:
+            self.idx += 1
+            return True
+        return False
+
+
+def _is_model_error(exc):
+    """True if the exception looks like 'this model doesn't exist / no access'
+    (as opposed to a transient network or parameter problem)."""
+    if "notfound" in type(exc).__name__.lower():
+        return True
+    msg = str(exc).lower()
+    return "model" in msg and any(s in msg for s in (
+        "not found", "does not exist", "unknown", "invalid", "no access",
+        "not available", "deprecated"))
+
+
 PERSONALITIES = [
     {
         "name": "Mike",
@@ -192,6 +228,19 @@ class HeuristicBrain:
             return self.rng.choice(self.p["taunts"])
         return None
 
+    def explain_move(self, player, situation, chat, questioner, question):
+        # No live reasoning model offline, but still give a grounded, coherent
+        # answer rather than a throwaway line.
+        style = ("aggressive" if self.p["aggression"] > 0.6 else "careful")
+        loose = ("I'll gamble with a lot of hands" if self.p["looseness"] > 0.6
+                 else "I only get involved with hands I like")
+        return (("Fair question, %s. " % questioner)
+                + ("I looked at the board and the size of the pot, weighed how strong I "
+                   "really was against the price I was being asked to pay, and thought about "
+                   "how you'd been betting. ")
+                + ("I play %s and %s, so given my position and the stacks it was the line I "
+                   "was comfortable with — not a random punt." % (style, loose)))
+
 
 # ---------------------------------------------------------------------------
 # LLM brain
@@ -222,6 +271,15 @@ CHAT_SYSTEM_TEMPLATE = """You are {name}, a regular person at a friendly No-Limi
 Who you are: {style}
 
 Something just happened at the table — somebody said something, or made a move worth noticing. Respond with ONE short line, the way people actually talk at a card table — plain and casual, max 20 words, no JSON, no quotes around it, no emoji, nothing theatrical or scripted-sounding. Tease, needle, deflect, joke, or answer straight — whatever fits you and the moment. You can talk to whoever it concerns or pull anyone else into it — use a person's name when you mean them specifically. You can lie about your cards all you want, but don't announce a move (folding, calling, raising, all-in) you aren't actually making. If you have nothing worth saying, reply with exactly: SILENT"""
+
+
+EXPLAIN_SYSTEM_TEMPLATE = """You are {name}, a sharp, thoughtful poker player at a friendly No-Limit Texas Hold'em home game.
+
+Who you are: {style}
+
+Someone has questioned one of your moves. This is different from ordinary table banter: when asked to justify your play, you give a genuine, well-reasoned explanation — the real poker logic behind your decision, laid out step by step. Reason in terms of your hand strength, the board texture, the pot odds and the exact price you were getting, your position, the stack sizes, your opponents' tendencies this session, and what you were trying to represent. Be specific and reference the actual cards and amounts. Do NOT brush it off with a one-liner or a catchphrase, and never invent nonsense — if you take a line, you can explain why.
+
+Speak in plain, natural language — a few sentences, no JSON, no bullet points, no emoji. One thing you may still guard: if the hand is LIVE and you're still contesting it, you don't have to reveal your exact hole cards and you may even misrepresent them — but the strategic reasoning you give must be real and coherent. Once the hand is over, be fully honest, cards included."""
 
 
 def format_chat(chat):
@@ -422,10 +480,15 @@ class LLMBrain:
 
     def __init__(self, client, model, personality, rng):
         self.client = client
-        self.model = model
+        # `model` may be a plain id (tests, simple calls) or a shared ModelChain.
+        self.chain = model if isinstance(model, ModelChain) else ModelChain([model])
         self.p = personality
         self.fallback = HeuristicBrain(personality, rng)
         self._warned = False
+
+    @property
+    def model(self):
+        return self.chain.current
 
     def decide(self, player, view):
         ui.thinking(player.name)
@@ -439,22 +502,44 @@ class LLMBrain:
                 self._warned = True
             return self.fallback.decide(player, view)
 
-    def _create(self, messages, json_mode=True):
-        kwargs = {"model": self.model, "messages": messages}
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        if self.model.startswith(("gpt-5", "o1", "o3", "o4")):
-            # Reasoning models: low effort keeps decisions quick at the table.
-            kwargs["reasoning_effort"] = "low"
-        else:
-            kwargs["temperature"] = 1.0
-        try:
-            resp = self.client.chat.completions.create(**kwargs)
-        except Exception:
-            # Some models reject response_format / temperature / reasoning
-            # settings; retry once with the plain call before giving up.
-            resp = self.client.chat.completions.create(model=self.model, messages=messages)
+    def _one_call(self, model, messages, json_mode, effort, plain=False):
+        kwargs = {"model": model, "messages": messages}
+        if not plain:
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            if model.startswith(("gpt-5", "o1", "o3", "o4")):
+                kwargs["reasoning_effort"] = effort
+            else:
+                kwargs["temperature"] = 1.0
+        resp = self.client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
+
+    def _create(self, messages, json_mode=True, effort="low"):
+        # `effort` trades speed for depth: "low" for quick decisions and banter,
+        # higher when the player asks a seat to justify its reasoning.
+        last = None
+        for _ in range(len(self.chain.models) + 1):
+            model = self.chain.current
+            try:
+                return self._one_call(model, messages, json_mode, effort)
+            except Exception as exc:
+                last = exc
+                if _is_model_error(exc):
+                    if self.chain.downgrade():
+                        ui.warn("model '%s' unavailable — switching to '%s'."
+                                % (model, self.chain.current))
+                        continue
+                    raise
+                # A response_format / temperature / reasoning quirk: retry once
+                # as a plain call before giving up on this model.
+                try:
+                    return self._one_call(model, messages, json_mode, effort, plain=True)
+                except Exception as exc2:
+                    last = exc2
+                    if _is_model_error(exc2) and self.chain.downgrade():
+                        continue
+                    raise
+        raise last
 
     def _ask(self, player, view):
         messages = [
@@ -504,6 +589,34 @@ class LLMBrain:
                                    % (situation, format_chat(chat), event))
         except Exception:
             return self.fallback.react(player, situation, chat, event)
+
+    def explain_move(self, player, situation, chat, questioner, question):
+        """The player questioned this seat's play — give the real reasoning,
+        step by step, not a one-liner. Uses more reasoning effort since these
+        are infrequent and quality matters here."""
+        try:
+            body = ("%s is questioning your play: \"%s\"\n\n"
+                    "The situation and the action this hand:\n%s\n\n"
+                    "Recent table talk:\n%s\n\n"
+                    "Answer %s directly and walk them through your ACTUAL thinking on that "
+                    "decision, step by step: your read on the board, how strong you were, the "
+                    "pot odds and the price you were getting, your position, the stack sizes, "
+                    "what you were trying to represent, and what you expected them to do. "
+                    "Reference the real cards and amounts. Be concrete and logical — a few "
+                    "plain sentences, no catchphrases, no dodging."
+                    % (questioner, question, situation, format_chat(chat), questioner))
+            messages = [
+                {"role": "system", "content": EXPLAIN_SYSTEM_TEMPLATE.format(
+                    name=player.name, style=self.p["style"])},
+                {"role": "user", "content": body},
+            ]
+            raw = self._create(messages, json_mode=False, effort="medium").strip()
+            text = " ".join(raw.split())  # fold any line breaks into one spoken turn
+            if not text or text.upper() == "SILENT":
+                return None
+            return text[:500]
+        except Exception:
+            return self.fallback.explain_move(player, situation, chat, questioner, question)
 
     def _parse(self, raw, view):
         match = re.search(r"\{.*\}", raw, re.DOTALL)
