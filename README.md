@@ -56,13 +56,16 @@ standings show stack, debt, and net.
 
 ## The opponents
 
-Tex (maniac cowboy), Ivy (icy math PhD), Rusty (superstitious calling
-station), Nova (chaotic hacker), The Professor (GTO lecturer), Lucky Lin
-(fate-trusting gambler) and Dmitri (silent rock). Each hand, every AI decision
-is one API call with only public information plus that AI's own cards — the
-prompt spells out their made hand and pot odds, and demands disciplined play:
-big bets need real hands. They bluff, needle you, answer your table talk, and
-hold grudges (and debts) across hands.
+Seven regulars from a weekly home game: Mike (loose-aggressive retired
+firefighter), Sarah (tight accountant), Emma (med student who can't fold),
+Dave (blunt contractor), Linda (patient retired math teacher), Frank (barber
+riding imaginary heaters) and Ray (quiet trucker). They talk like normal
+people at a card table — short, casual, reacting to what actually happened —
+not like scripted characters. Each hand, every decision is one API call with
+only public information plus that player's own cards — the prompt spells out
+their made hand and pot odds, and demands disciplined play: big bets need
+real hands. They bluff, needle you, answer your table talk, and hold grudges
+(and debts) across hands.
 
 If the API is unreachable mid-game, that opponent quietly falls back to
 built-in instincts, so the game never crashes.

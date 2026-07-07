@@ -288,11 +288,11 @@ def test_table_talk_gets_replies():
                for pers in roster]
     game = make_game(players, rng=rng)
     speaker = players[0]
-    game.table_talk(speaker, "you all play scared, especially you Ivy")
-    ok(game.chat[0] == (speaker.name, "you all play scared, especially you Ivy"),
+    game.table_talk(speaker, "you all play scared, especially you Sarah")
+    ok(game.chat[0] == (speaker.name, "you all play scared, especially you Sarah"),
        "spoken line lands in the shared chat log")
     repliers = {name for name, _ in game.chat[1:]}
-    ok("Ivy" in repliers, "an agent addressed by name answers")
+    ok("Sarah" in repliers, "an agent addressed by name answers")
     ok(speaker.name not in repliers, "the speaker doesn't answer themselves")
     game.hand_players = list(players)
     view = game.build_view(players[1])
