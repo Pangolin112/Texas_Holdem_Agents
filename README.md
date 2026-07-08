@@ -68,6 +68,13 @@ side pots. Nobody is ever eliminated: whoever goes broke (you included) is
 automatically restaked by the house, and the loan is tracked on their tab —
 standings show stack, debt, and net.
 
+**Topping up.** Between hands you can reload before the next deal: type
+`buy <n>` to add chips to your stack — up to one starting stack per hand — and
+each AI decides on its own whether to top up a short stack too (short-stacked
+gamblers reload sooner and bigger than the tight players). Bought chips come
+from the house and go on your tab just like a rebuy, so your net
+(stack − debt) is unchanged — it's more ammunition on the table, not profit.
+
 ## Peek mode
 
 Run with `--show-cards` and, once a hand is over, the game lays **every dealt

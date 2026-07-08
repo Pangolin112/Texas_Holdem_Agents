@@ -192,6 +192,11 @@ def announce_pot(text):
     out(_c(C.YELLOW, "   ● " + text))
 
 
+def announce_buy(player, amount, debt):
+    out(_c(C.YELLOW, "   $ %s buys in for %d more chips (tab now %d)."
+           % (player.name, amount, debt)))
+
+
 def announce_rebuy(player, stake, debt, line=None):
     out()
     out(_c(C.YELLOW, " $ %s is felted — the house stakes another %d (tab now %d)."

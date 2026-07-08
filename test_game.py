@@ -353,6 +353,44 @@ def test_rebuy_adds_debt_nobody_leaves():
     ok(p[1].debt == 0, "solvent players owe nothing")
 
 
+def test_buy_chips_keeps_net_worth():
+    p = [Player("A", 1000), Player("B", 1000)]
+    game = make_game(p)
+    net_before = p[0].stack - p[0].debt
+    got = game.grant_chips(p[0], 300)
+    ok(got == 300, "grant_chips returns the amount added")
+    ok(p[0].stack == 1300 and p[0].debt == 300, "bought chips added to stack and to the tab")
+    ok(p[0].stack - p[0].debt == net_before, "buying chips leaves net worth unchanged")
+    ok(p[1].stack == 1000 and p[1].debt == 0, "other seats untouched by a top-up")
+
+
+def test_buy_decision_capped_and_reloads_short_stacks():
+    brain = HeuristicBrain(PERSONALITIES[0], random.Random(0))  # Mike: loose + aggressive
+    full = 1000
+    deep = Player("deep", 900)
+    ok(brain.buy_decision(deep, full, full) == 0, "a still-deep stack stands pat")
+    short = Player("short", 100)
+    amounts = [brain.buy_decision(short, full, full) for _ in range(300)]
+    ok(all(0 <= a <= full for a in amounts), "a top-up never exceeds the cap")
+    ok(all(short.stack + a <= full for a in amounts), "a top-up never overshoots a full stack")
+    ok(any(a > 0 for a in amounts), "a gambler does reload a short stack sometimes")
+
+
+def test_ai_buy_ins_preserve_chip_invariant():
+    rng = random.Random(1)
+    roster = rng.sample(PERSONALITIES, 4)
+    players = [LLMPlayer(pers["name"], 1000, pers, HeuristicBrain(pers, rng))
+               for pers in roster]
+    game = make_game(players, rng=rng)
+    for pl in players:  # short-stack everyone so top-ups actually trigger
+        pl.stack = 150
+    game.ai_buy_ins()
+    total = sum(pl.stack for pl in players)
+    debts = sum(pl.debt for pl in players)
+    ok(total == 600 + debts, "AI top-ups keep chips = on-table + house loans")
+    ok(all(pl.debt <= 1000 for pl in players), "no seat buys more than one stack at once")
+
+
 def talk_game(names, seed=11):
     rng = random.Random(seed)
     by_name = {p["name"]: p for p in PERSONALITIES}
@@ -532,6 +570,9 @@ if __name__ == "__main__":
     test_deal_fairness()
     test_system_random_games()
     test_rebuy_adds_debt_nobody_leaves()
+    test_buy_chips_keeps_net_worth()
+    test_buy_decision_capped_and_reloads_short_stacks()
+    test_ai_buy_ins_preserve_chip_invariant()
     test_addressee_resolution()
     test_table_talk_gets_replies()
     test_move_reactions()

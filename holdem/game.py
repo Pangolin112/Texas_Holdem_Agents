@@ -95,14 +95,22 @@ class TexasHoldemGame:
         ui.show_standings(self.players, "final standings")
 
     def between_hands(self):
-        """Standings and chat between hands. Returns False to end the game."""
+        """Top-ups, standings and chat between hands. Returns False to end."""
+        self.ai_buy_ins()
         ui.show_standings(self.players)
+        cap = self.starting_stack
+        bought = 0  # the human may top up at most one starting stack per break
         while True:
+            left = cap - bought
+            buy_hint = ("buy <n> top up (up to %d) · " % left) if left > 0 else ""
             answer = ui.safe_input(
-                "\n [Enter] next hand · say <text> to chat · q to quit > ").strip()
+                "\n [Enter] next hand · %ssay <text> · q to quit > " % buy_hint).strip()
             low = answer.lower()
             if low in ("q", "quit", "exit"):
                 return False
+            if low.startswith("buy"):
+                bought += self.human_buy(answer[3:].strip(), left)
+                continue
             if low.startswith("say"):
                 text = answer[3:].strip()
                 if text:
@@ -111,6 +119,53 @@ class TexasHoldemGame:
                     ui.out(ui.dim("   usage: say <something>"))
                 continue
             return True
+
+    def ai_buy_ins(self):
+        """Before the next hand, each AI seat may top up its own stack — buying
+        up to one starting stack from the house, which goes on its tab. A local
+        economic call per seat, no API round-trips."""
+        cap = self.starting_stack
+        for p in self.players:
+            if p.is_human or not hasattr(p, "brain"):
+                continue
+            want = p.brain.buy_decision(p, cap, self.starting_stack)
+            amount = self.grant_chips(p, min(int(want or 0), cap))
+            if amount:
+                ui.announce_buy(p, amount, p.debt)
+
+    def human_buy(self, arg, allowance):
+        """The human tops up their own stack. Chips are added to the stack and
+        to the tab (net worth unchanged). Returns the amount actually bought."""
+        human = self.human
+        if human is None:
+            return 0
+        if allowance <= 0:
+            ui.out(ui.dim("   you've already topped up the max for this hand."))
+            return 0
+        digits = "".join(ch for ch in arg if ch.isdigit())
+        if not digits:
+            ui.out(ui.dim("   usage: buy <amount>  (1–%d chips, added to your stack and your tab)"
+                          % allowance))
+            return 0
+        amount = int(digits)
+        if amount <= 0:
+            return 0
+        if amount > allowance:
+            ui.out(ui.dim("   capped at %d more this hand — buying that." % allowance))
+            amount = allowance
+        self.grant_chips(human, amount)
+        ui.announce_buy(human, amount, human.debt)
+        return amount
+
+    def grant_chips(self, player, amount):
+        """Sell chips from the house: added to the stack and put on the tab, so
+        net worth (stack - debt) is unchanged — it's a loan for more ammunition
+        on the table. Returns the amount granted."""
+        amount = max(0, int(amount or 0))
+        if amount:
+            player.stack += amount
+            player.debt += amount
+        return amount
 
     def handle_rebuys(self):
         """Nobody leaves the table: broke players are restaked by the house

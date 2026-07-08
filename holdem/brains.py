@@ -215,6 +215,22 @@ class HeuristicBrain:
             return Action(CALL), say
         return Action(FOLD), None
 
+    def buy_decision(self, player, cap, starting_stack):
+        """Voluntary top-up before the next hand. Returns chips to buy (0 =
+        stand pat), never more than `cap`. Only a short stack gets reloaded,
+        and looser/bolder players reload sooner and closer to a full stack."""
+        stack = player.stack
+        if stack >= 0.6 * starting_stack:
+            return 0  # still deep enough to play — no need to reload
+        loose = self.p["looseness"]
+        aggr = self.p["aggression"]
+        shortness = 1.0 - stack / float(starting_stack)  # ~0 full .. ~1 near broke
+        chance = 0.10 + shortness * 0.55 + (loose - 0.5) * 0.30 + (aggr - 0.5) * 0.20
+        if self.rng.random() >= chance:
+            return 0
+        want = starting_stack - stack  # reload back toward a full stack
+        return max(0, min(want, cap))
+
     def chat_reply(self, player, situation, chat, speaker_name, text, addressed=None):
         # Spoken to directly -> almost always answer; general remark -> often;
         # overhearing someone else's exchange -> rarely butt in.
@@ -501,6 +517,11 @@ class LLMBrain:
                         % (player.name, type(exc).__name__, str(exc)[:120]))
                 self._warned = True
             return self.fallback.decide(player, view)
+
+    def buy_decision(self, player, cap, starting_stack):
+        # A quick economic call, not worth an API round-trip — reuse the
+        # heuristic so between-hand top-ups stay instant and free.
+        return self.fallback.buy_decision(player, cap, starting_stack)
 
     def _one_call(self, model, messages, json_mode, effort, plain=False):
         kwargs = {"model": model, "messages": messages}
