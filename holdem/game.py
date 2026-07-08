@@ -121,17 +121,35 @@ class TexasHoldemGame:
             return True
 
     def ai_buy_ins(self):
-        """Before the next hand, each AI seat may top up its own stack — buying
-        up to one starting stack from the house, which goes on its tab. A local
-        economic call per seat, no API round-trips."""
+        """Before the next hand, each AI seat decides for itself whether to top
+        up — buying up to one starting stack from the house, which goes on its
+        tab. LLM seats genuinely weigh it (only when below a full buy-in);
+        offline seats go on instinct."""
         cap = self.starting_stack
+        table = self.buy_context()
+        weighing = [p for p in self.players
+                    if not p.is_human and hasattr(p, "brain")
+                    and getattr(p.brain, "is_llm", False)
+                    and p.stack < self.starting_stack]
+        if weighing:
+            ui.out(ui.dim("   (the table weighs topping up…)"))
         for p in self.players:
             if p.is_human or not hasattr(p, "brain"):
                 continue
-            want = p.brain.buy_decision(p, cap, self.starting_stack)
+            want = p.brain.buy_decision(p, cap, self.starting_stack, table)
             amount = self.grant_chips(p, min(int(want or 0), cap))
             if amount:
                 ui.announce_buy(p, amount, p.debt)
+
+    def buy_context(self):
+        """Compact between-hands snapshot for the top-up decision: blinds, the
+        current standings (by net), and recent-hand memory."""
+        return {
+            "blinds": (self.sb, self.bb),
+            "standings": [(p.name, p.stack, p.debt) for p in
+                          sorted(self.players, key=lambda x: -(x.stack - x.debt))],
+            "memory": list(self.memory),
+        }
 
     def human_buy(self, arg, allowance):
         """The human tops up their own stack. Chips are added to the stack and

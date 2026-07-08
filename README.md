@@ -70,10 +70,12 @@ standings show stack, debt, and net.
 
 **Topping up.** Between hands you can reload before the next deal: type
 `buy <n>` to add chips to your stack — up to one starting stack per hand — and
-each AI decides on its own whether to top up a short stack too (short-stacked
-gamblers reload sooner and bigger than the tight players). Bought chips come
-from the house and go on your tab just like a rebuy, so your net
-(stack − debt) is unchanged — it's more ammunition on the table, not profit.
+each AI decides for itself whether to do the same. When a bot is sitting below
+a full buy-in it genuinely weighs a top-up: its own model looks at its stack,
+its tab, how it's running and who's ahead, and reloads (or passes) in
+character — offline bots go on instinct instead. Bought chips come from the
+house and go on your tab just like a rebuy, so your net (stack − debt) is
+unchanged — it's more ammunition on the table, not profit.
 
 ## Peek mode
 

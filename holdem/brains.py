@@ -215,10 +215,11 @@ class HeuristicBrain:
             return Action(CALL), say
         return Action(FOLD), None
 
-    def buy_decision(self, player, cap, starting_stack):
+    def buy_decision(self, player, cap, starting_stack, table=None):
         """Voluntary top-up before the next hand. Returns chips to buy (0 =
         stand pat), never more than `cap`. Only a short stack gets reloaded,
-        and looser/bolder players reload sooner and closer to a full stack."""
+        and looser/bolder players reload sooner and closer to a full stack.
+        (`table` is ignored here — the offline brain goes on instinct.)"""
         stack = player.stack
         if stack >= 0.6 * starting_stack:
             return 0  # still deep enough to play — no need to reload
@@ -296,6 +297,16 @@ Who you are: {style}
 Someone has questioned one of your moves. This is different from ordinary table banter: when asked to justify your play, you give a genuine, well-reasoned explanation — the real poker logic behind your decision, laid out step by step. Reason in terms of your hand strength, the board texture, the pot odds and the exact price you were getting, your position, the stack sizes, your opponents' tendencies this session, and what you were trying to represent. Be specific and reference the actual cards and amounts. Do NOT brush it off with a one-liner or a catchphrase, and never invent nonsense — if you take a line, you can explain why.
 
 Speak in plain, natural language — a few sentences, no JSON, no bullet points, no emoji. One thing you may still guard: if the hand is LIVE and you're still contesting it, you don't have to reveal your exact hole cards and you may even misrepresent them — but the strategic reasoning you give must be real and coherent. Once the hand is over, be fully honest, cards included."""
+
+
+BUY_SYSTEM_TEMPLATE = """You are {name}, a regular person in a friendly No-Limit Texas Hold'em home game with people you know.
+
+Who you are: {style}
+
+The last hand just finished and the next one is about to start. Before it does, you can top up your chips — buy more from the house so you have a bigger stack in front of you. The chips are added to your stack, but you owe them back: they go on your tab, so it's borrowing to have more ammunition, not free money. Reload if you're short and want to keep playing your game, or if you like having chips to lean on people; keep it small or skip it entirely if you're comfortable, if you're winning, or if you don't like being in the hole. Decide the way {name} really would.
+
+Respond with ONE JSON object and nothing else:
+{{"buy": <integer chips to buy, 0 to skip, at most {cap}>}}"""
 
 
 def format_chat(chat):
@@ -518,10 +529,44 @@ class LLMBrain:
                 self._warned = True
             return self.fallback.decide(player, view)
 
-    def buy_decision(self, player, cap, starting_stack):
-        # A quick economic call, not worth an API round-trip — reuse the
-        # heuristic so between-hand top-ups stay instant and free.
-        return self.fallback.buy_decision(player, cap, starting_stack)
+    def buy_decision(self, player, cap, starting_stack, table=None):
+        """Let the agent genuinely decide, via the model, how many chips to buy
+        before the next hand (0 to skip, at most `cap`). Only a seat below a
+        full buy-in bothers to weigh it — a comfortably stacked one stands pat
+        without spending a call. Any API/parse failure falls back to instinct."""
+        if player.stack >= starting_stack:
+            return 0
+        try:
+            return self._ask_buy(player, cap, starting_stack, table or {})
+        except Exception:
+            return self.fallback.buy_decision(player, cap, starting_stack, table)
+
+    def _ask_buy(self, player, cap, starting_stack, table):
+        sb, bb = table.get("blinds", (0, 0))
+        standings = table.get("standings") or []
+        stand_txt = "\n".join(
+            "- %s: stack %d%s" % (n, s, (", owes the house %d" % d) if d else "")
+            for n, s, d in standings) or "(just you at the table)"
+        memory = table.get("memory") or []
+        mem_txt = "\n".join(memory[-5:]) or "(this is the first hand)"
+        messages = [
+            {"role": "system", "content": BUY_SYSTEM_TEMPLATE.format(
+                name=player.name, style=self.p["style"], cap=cap)},
+            {"role": "user", "content":
+                ("Your stack: %d. Your tab so far: %d. A full buy-in is %d. Blinds %d/%d.\n\n"
+                 "How everyone stands right now (by net worth):\n%s\n\n"
+                 "Recent hands this session:\n%s\n\n"
+                 "How many chips do you buy before the next hand? 0 to skip, at most %d. "
+                 "Respond with the JSON object only."
+                 % (player.stack, player.debt, starting_stack, sb, bb,
+                    stand_txt, mem_txt, cap))},
+        ]
+        raw = self._create(messages)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            raise ValueError("no JSON in buy reply")
+        amount = int(json.loads(match.group(0)).get("buy") or 0)
+        return max(0, min(amount, cap))
 
     def _one_call(self, model, messages, json_mode, effort, plain=False):
         kwargs = {"model": model, "messages": messages}

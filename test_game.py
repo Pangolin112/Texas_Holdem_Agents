@@ -376,6 +376,32 @@ def test_buy_decision_capped_and_reloads_short_stacks():
     ok(any(a > 0 for a in amounts), "a gambler does reload a short stack sometimes")
 
 
+def test_llm_buy_decision_parses_and_clamps():
+    brain = LLMBrain(client=None, model="x", personality=PERSONALITIES[0],
+                     rng=random.Random(1))
+    short = Player("z", 300)  # below a full buy-in -> the agent is actually asked
+    brain._create = lambda messages, **kw: '{"buy": 400}'
+    ok(brain.buy_decision(short, 1000, 1000) == 400, "LLM buy amount parsed")
+    brain._create = lambda messages, **kw: '{"buy": 99999}'
+    ok(brain.buy_decision(short, 1000, 1000) == 1000, "LLM buy amount clamped to the cap")
+    brain._create = lambda messages, **kw: '{"buy": -50}'
+    ok(brain.buy_decision(short, 1000, 1000) == 0, "a negative buy is floored at zero")
+
+    # A comfortably full stack stands pat WITHOUT ever calling the model.
+    def boom(*a, **k):
+        raise AssertionError("a full stack must not spend a model call")
+    brain._create = boom
+    ok(brain.buy_decision(Player("full", 1000), 1000, 1000) == 0,
+       "a full buy-in skips the decision entirely")
+
+    # A model/parse failure falls back to the heuristic instead of crashing.
+    def blow_up(*a, **k):
+        raise RuntimeError("uplink down")
+    brain._create = blow_up
+    val = brain.buy_decision(Player("y", 100), 1000, 1000)
+    ok(0 <= val <= 1000, "buy decision falls back to instinct on model error")
+
+
 def test_ai_buy_ins_preserve_chip_invariant():
     rng = random.Random(1)
     roster = rng.sample(PERSONALITIES, 4)
@@ -572,6 +598,7 @@ if __name__ == "__main__":
     test_rebuy_adds_debt_nobody_leaves()
     test_buy_chips_keeps_net_worth()
     test_buy_decision_capped_and_reloads_short_stacks()
+    test_llm_buy_decision_parses_and_clamps()
     test_ai_buy_ins_preserve_chip_invariant()
     test_addressee_resolution()
     test_table_talk_gets_replies()
