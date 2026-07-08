@@ -658,8 +658,11 @@ class LLMBrain:
 
     def explain_move(self, player, situation, chat, questioner, question):
         """The player questioned this seat's play — give the real reasoning,
-        step by step, not a one-liner. Uses more reasoning effort since these
-        are infrequent and quality matters here."""
+        step by step, not a one-liner. Kept at "low" reasoning effort: the
+        prompt already asks for the genuine step-by-step logic, and low effort
+        answers fast enough that the human isn't left waiting — a laggy reply
+        kills the back-and-forth even when the content is good."""
+        ui.thinking(player.name)  # show feedback while the model composes
         try:
             body = ("%s is questioning your play: \"%s\"\n\n"
                     "The situation and the action this hand:\n%s\n\n"
@@ -676,7 +679,7 @@ class LLMBrain:
                     name=player.name, style=self.p["style"])},
                 {"role": "user", "content": body},
             ]
-            raw = self._create(messages, json_mode=False, effort="medium").strip()
+            raw = self._create(messages, json_mode=False, effort="low").strip()
             text = " ".join(raw.split())  # fold any line breaks into one spoken turn
             if not text or text.upper() == "SILENT":
                 return None

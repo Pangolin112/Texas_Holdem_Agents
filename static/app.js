@@ -124,6 +124,7 @@ function handle(ev) {
       G.thinking = ev.name;
       break;
     case "chat":
+      if (ev.name === G.thinking) G.thinking = null;  // their reply arrived
       showBubble(ev.name, ev.text, ev.to);
       feed(`<span class="who">${esc(ev.name)}</span>${ev.to ? ` (to ${esc(ev.to)})` : ""}: "${esc(ev.text)}"`, "chat");
       break;
