@@ -319,12 +319,15 @@ class TexasHoldemGame:
             parts = ["Hand #%d, street %s, board: %s, pot: %d."
                      % (self.hand_no, self.street, board_txt, self.pot_total())]
             if p in self.hand_players and p.folded:
-                parts.append("You have folded this hand.")
+                parts.append("You have folded this hand — still, keep your cards to "
+                             "yourself until the hand is over.")
             elif p in self.hand_players and p.hole:
-                parts.append("Your hole cards (secret): %s."
+                parts.append("Your hole cards (SECRET — the hand is live, so do NOT "
+                             "reveal them to anyone; bluff or say nothing): %s."
                              % " ".join(str(c) for c in p.hole))
         else:
-            parts = ["Between hands (hand #%d just ended)." % self.hand_no]
+            parts = ["Between hands (hand #%d just ended — you may be honest about "
+                     "what you held now if you like)." % self.hand_no]
         parts.append("Your stack: %d." % p.stack)
         if p.debt:
             parts.append("Your debt to the house: %d." % p.debt)
@@ -341,11 +344,12 @@ class TexasHoldemGame:
                          % (self.hand_no, self.street, board_txt, self.pot_total(), p.stack))
             parts.append("Your own hole cards: %s."
                          % (" ".join(str(c) for c in p.hole) if p.hole else "(none dealt)"))
-            if p in self.hand_players and not p.folded:
-                parts.append("This hand is STILL LIVE and you're still in it — you may keep "
-                             "your exact cards to yourself, but your reasoning must be real.")
-            else:
-                parts.append("You're out of this hand now, so you can speak freely and honestly.")
+            stance = ("You're still contesting this hand." if p in self.hand_players
+                      and not p.folded else "You've folded, but the hand isn't finished yet.")
+            parts.append("%s The hand is STILL LIVE, so you must NOT reveal your exact hole "
+                         "cards to anyone — keep them secret or bluff, but never state what you "
+                         "truly hold until the hand is over. Your reasoning must still be real "
+                         "and coherent." % stance)
         else:
             parts.append("The last hand (#%d) just finished — you can be fully honest about it."
                          % self.hand_no)
