@@ -31,6 +31,7 @@ Options:
 | `--model NAME` | preferred OpenAI model (default `gpt-5.2`, or `$OPENAI_MODEL`; auto-falls back if unavailable) |
 | `--offline` | no API — opponents use built-in bot logic |
 | `--seed N` | reproducible shuffles |
+| `--show-cards` | peek mode: reveal every opponent's hole cards after each hand |
 
 ## At the table
 
@@ -66,6 +67,14 @@ Full no-limit rules: blinds, min-raise tracking, all-ins, split pots and
 side pots. Nobody is ever eliminated: whoever goes broke (you included) is
 automatically restaked by the house, and the loan is tracked on their tab —
 standings show stack, debt, and net.
+
+## Peek mode
+
+Run with `--show-cards` and, once a hand is over, the game lays **every dealt
+seat's hole cards face up** — folders included — alongside the hand each would
+have made. It's a study/debug view: see what the AIs were actually holding,
+whether a bluff was real, and which folds were mistakes. (Nothing is leaked
+mid-hand; the reveal happens only after the hand finishes.)
 
 ## The opponents
 
