@@ -60,6 +60,7 @@
     <button id="btn-leave" class="ghost danger" title="Leave the table">Leave</button>
   </header>
 
+  <div id="content">
   <main id="table-wrap">
     <div id="table">
       <div id="felt"></div>
@@ -80,6 +81,13 @@
       <div id="award" class="award hidden"></div>
     </div>
   </main>
+
+  <!-- event / chat feed (history board) -->
+  <aside id="feed">
+    <div class="feed-head">Table feed</div>
+    <div id="feed-list"></div>
+  </aside>
+  </div><!-- /content -->
 
   <!-- hero controls -->
   <section id="hero-bar">
@@ -127,12 +135,6 @@
       <button id="say-go" class="ghost">Say</button>
     </div>
   </section>
-
-  <!-- event / chat feed -->
-  <aside id="feed">
-    <div class="feed-head">Table feed</div>
-    <div id="feed-list"></div>
-  </aside>
 </div>
 
 <!-- help modal -->

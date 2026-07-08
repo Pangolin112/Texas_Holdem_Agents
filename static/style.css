@@ -110,12 +110,18 @@ button { font-family: inherit; cursor: pointer; border: none; }
 #mode-label.live { color: var(--gold); border-color: var(--gold-soft); }
 
 /* ---------------- layout: table + feed ---------------- */
+/* middle row between the top bar and the hero bar: table on the left,
+   history feed on the right — each confined to this row's height so neither
+   the top bar nor the controls ever overlap them. */
+#content {
+  flex: 1 1 auto; display: flex; min-height: 0;
+}
 #table-wrap {
-  flex: 1 1 auto; position: relative; min-height: 0;
-  padding: 14px 320px 6px 14px;   /* room for the feed on the right */
+  flex: 1 1 auto; position: relative; min-height: 0; min-width: 0;
+  padding: 14px 14px 6px 14px;
 }
 #feed {
-  position: absolute; top: 0; right: 0; bottom: 0; width: 300px;
+  flex: 0 0 300px; min-height: 0;
   background: var(--panel); border-left: 1px solid var(--line);
   display: flex; flex-direction: column;
 }
@@ -281,7 +287,7 @@ button { font-family: inherit; cursor: pointer; border: none; }
 /* ---------------- hero bar ---------------- */
 #hero-bar {
   flex: 0 0 auto; background: var(--panel); border-top: 1px solid var(--line);
-  padding: 10px 320px 12px 16px; position: relative; z-index: 4;
+  padding: 10px 16px 12px 16px; position: relative; z-index: 4;
 }
 .hero-hint { min-height: 18px; color: var(--gold-soft); font-size: 14px; margin-bottom: 8px; font-weight: 600; }
 .controls, .between { transition: opacity .2s; }
@@ -316,10 +322,11 @@ button { font-family: inherit; cursor: pointer; border: none; }
 #say-input { flex: 1; background: #0e141a; border: 1px solid var(--line); color: var(--text); border-radius: 9px; padding: 9px 12px; font-size: 14px; outline: none; }
 #say-input:focus { border-color: var(--gold-soft); }
 
-/* narrow screens: drop the feed under the table */
+/* narrow screens: stack the feed under the table */
 @media (max-width: 900px) {
+  #content { flex-direction: column; }
   #table-wrap { padding: 10px; }
   #hero-bar { padding: 10px 12px 12px; }
-  #feed { position: static; width: auto; height: 150px; border-left: none; border-top: 1px solid var(--line); }
+  #feed { flex: 0 0 150px; border-left: none; border-top: 1px solid var(--line); }
   #game { overflow-y: auto; }
 }
