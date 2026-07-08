@@ -18,7 +18,25 @@ const G = {
   seatPos: {},        // name -> {x, y} in table % coords
   meta: {},
   summary: null,      // finished-hand recap, shown until the next deal
+  actions: {},        // name -> {t, k}: each seat's latest move this street
 };
+
+// turn an engine action phrase ("raises to 120", "calls 20 (all-in)") into a
+// short chip label + a kind used for its color.
+function actionLabel(desc) {
+  const d = desc.toLowerCase();
+  const num = (desc.match(/(\d+)/) || [])[1];
+  const n = num ? " " + num : "";
+  if (d.includes("fold")) return { t: "Fold", k: "fold" };
+  if (d.includes("small blind")) return { t: "SB" + n, k: "post" };
+  if (d.includes("big blind")) return { t: "BB" + n, k: "post" };
+  if (d.includes("all-in") || d.includes("all in")) return { t: "All-in" + n, k: "allin" };
+  if (d.startsWith("checks")) return { t: "Check", k: "check" };
+  if (d.startsWith("calls")) return { t: "Call" + n, k: "call" };
+  if (d.startsWith("bets")) return { t: "Bet" + n, k: "bet" };
+  if (d.startsWith("raises")) return { t: "Raise" + n, k: "raise" };
+  return { t: desc, k: "other" };
+}
 
 function resetSummary() {
   G.summary = { handNo: G.state ? G.state.hand_no : 0, lines: [], winners: {}, active: false };
@@ -89,14 +107,17 @@ function handle(ev) {
     case "hand_start":
       clearBubbles(); hideAward();
       resetSummary();
+      G.actions = {};
       G.thinking = null;
       feed(`— Hand #${ev.hand_no} · blinds ${ev.sb}/${ev.bb} · dealer ${ev.dealer} —`, "sys");
       break;
     case "street":
+      G.actions = {};   // fresh street — clear last-move chips
       feed(`${ev.street}`, "sys");
       break;
     case "action":
       G.thinking = null;
+      G.actions[ev.name] = actionLabel(ev.desc);
       feed(`<span class="who">${esc(ev.name)}</span> ${esc(ev.desc)}.`);
       break;
     case "thinking":
@@ -377,15 +398,24 @@ function seatEl(seat, x, y) {
 
   const body = document.createElement("div");
   body.className = "seat-body";
-  let badges = "";
-  if (seat.name === G.thinking && G.state.live) badges += `<span class="badge think">thinking…</span>`;
-  if (seat.all_in) badges += `<span class="badge allin">ALL-IN</span>`;
-  else if (seat.folded) badges += `<span class="badge fold">folded</span>`;
+  // status line under the name: while deciding show "thinking…", otherwise the
+  // seat's latest move this street (falling back to its folded/all-in state).
+  let status = "";
+  if (seat.name === G.thinking && G.state.live) {
+    status = `<span class="badge think">thinking…</span>`;
+  } else {
+    let act = G.actions[seat.name];
+    if (!act) {
+      if (seat.folded) act = { t: "Fold", k: "fold" };
+      else if (seat.all_in) act = { t: "All-in", k: "allin" };
+    }
+    if (act) status = `<span class="act-chip k-${act.k}">${esc(act.t)}</span>`;
+  }
   body.innerHTML =
     `<div class="seat-name">${esc(seat.name)}</div>` +
     `<div class="seat-stack">$${seat.stack}</div>` +
     (seat.debt ? `<div class="seat-debt">tab ${seat.debt}</div>` : "") +
-    `<div class="seat-badges">${badges}</div>`;
+    `<div class="seat-badges">${status}</div>`;
 
   el.appendChild(cardsRow);
   el.appendChild(body);

@@ -235,12 +235,25 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .seat.hero-seat .seat-name { color: var(--green); }
 .seat-stack { font-size: 13px; color: var(--gold); font-weight: 700; }
 .seat-debt { font-size: 10px; color: #d98c7a; }
-.seat-badges { display: flex; gap: 4px; justify-content: center; margin-top: 3px; min-height: 16px; }
+.seat-badges { display: flex; gap: 4px; justify-content: center; margin-top: 3px; min-height: 18px; }
 .badge { font-size: 10px; padding: 1px 6px; border-radius: 8px; font-weight: 700; letter-spacing: .3px; }
-.badge.fold { background: #33251f; color: #d98c7a; }
-.badge.allin { background: #4a1f1a; color: #ff7a68; }
 .badge.think { background: #2a2f1a; color: var(--gold); animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .4; } }
+
+/* the move each player just made, shown under their icon */
+.act-chip {
+  font-size: 11px; font-weight: 700; letter-spacing: .2px;
+  padding: 2px 9px; border-radius: 9px; white-space: nowrap;
+  border: 1px solid transparent; animation: badgepop .25s ease both;
+}
+.act-chip.k-check { background: #17331f; color: #6fdd8b; border-color: #235c33; }
+.act-chip.k-call  { background: #13324a; color: #6bc2f5; border-color: #1f597f; }
+.act-chip.k-bet,
+.act-chip.k-raise { background: #3a2a10; color: #ffc65a; border-color: #6a4d15; }
+.act-chip.k-allin { background: #4a1f1a; color: #ff8f7e; border-color: #7a2e26; }
+.act-chip.k-fold  { background: #26211f; color: #9b8e88; border-color: #3a322e; }
+.act-chip.k-post  { background: #22262c; color: #9fb0bd; border-color: #333d47; }
+.act-chip.k-other { background: #22262c; color: #b6c1cb; border-color: #333d47; }
 
 /* bet chips near a seat */
 .bet {
