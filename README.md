@@ -1,10 +1,24 @@
 # Texas Hold'em Agents ♠♥♦♣
 
-No-Limit Texas Hold'em in your terminal: **you** against a table of
-**OpenAI-powered opponents**, each with its own personality. They decide what
-to do from their hole cards, the board, the pot, everyone's stacks, the full
-betting history, past hands at the table — and whatever trash talk you throw
-at them.
+No-Limit Texas Hold'em: **you** against a table of **OpenAI-powered
+opponents**, each with its own personality. They decide what to do from their
+hole cards, the board, the pot, everyone's stacks, the full betting history,
+past hands at the table — and whatever trash talk you throw at them.
+
+Play it **two ways**, both driven by the *same* game engine and the same AI
+brains:
+
+| Version | Run | Look |
+|---|---|---|
+| **Terminal** | `python main.py` | text table in your console |
+| **Web** | `python webapp.py` | 2D table in the browser — animated cards, seats, chips, speech bubbles |
+
+> **One engine, many front-ends.** All the poker logic (rules, betting,
+> side pots, hand evaluation, the LLM/heuristic brains) lives once in the
+> `holdem/` package. The terminal and the web app are just two *views* onto
+> it, so a feature added to the engine appears in both at once. A future 3D
+> client would plug in the same way. **When you add a new feature, wire it
+> into every front-end.** See [Architecture](#architecture-shared-core) below.
 
 ## Setup
 
@@ -13,9 +27,10 @@ pip install -r requirements.txt
 copy .env.example .env      # then paste your OpenAI API key into .env
 ```
 
-(Or set the `OPENAI_API_KEY` environment variable instead of using `.env`.)
+(Or set the `OPENAI_API_KEY` environment variable instead of using `.env`.
+Both versions run without a key too — they fall back to offline bot logic.)
 
-## Play
+## Play — terminal
 
 ```bash
 python main.py
@@ -32,6 +47,29 @@ Options:
 | `--offline` | no API — opponents use built-in bot logic |
 | `--seed N` | reproducible shuffles |
 | `--show-cards` | peek mode: reveal every opponent's hole cards after each hand |
+
+## Play — web (2D table)
+
+```bash
+python webapp.py            # then open http://127.0.0.1:8000 (opens automatically)
+python webapp.py --port 8080 --no-browser
+```
+
+A local, dependency-free server (Python standard library only — no Flask, no
+npm) hosts a browser front-end with a green-felt 2D table: seats around an
+oval, animated dealt cards, community board and pot in the middle, the dealer
+button, per-seat stacks/bets and a "thinking…" glow while an AI decides, and
+speech bubbles when the table talks. A **setup screen** lets you pick your
+name, the number of opponents, stacks, blinds, model, and offline/peek modes —
+every option the terminal has. Click **Fold / Check-Call / Raise** (with a
+slider and ½·¾·pot shortcuts) **/ All-in**, type in the **Say** box to chat,
+and between hands **buy chips** or deal the next one. A live **table feed** on
+the right logs every action, showdown and remark.
+
+Under the hood the real `holdem` engine runs in a background thread; each game
+event is streamed to the browser over Server-Sent Events, and your clicks are
+sent back as the very same commands the terminal accepts (`f`, `c`, `r 120`,
+`a`, `say …`, `buy 200`). No poker logic is duplicated in JavaScript.
 
 ## At the table
 
@@ -124,6 +162,37 @@ game tells you at startup which mode is active. The test suite includes a
 per AI reply when you chat, or one deeper call when you ask a seat to explain
 a move). The default `gpt-5.2` plays the sharpest; `--model gpt-5-mini` or
 `--model gpt-4o-mini` are cheaper if you'd rather spend less.
+
+## Architecture (shared core)
+
+One engine, swappable front-ends:
+
+```
+holdem/                shared core — no front-end code
+  cards.py             deck + cards
+  evaluator.py         best 5-card hand, side-pot ranking
+  brains.py            LLM + heuristic decision-making (the personalities)
+  players.py           human + AI seats
+  game.py              the No-Limit engine (betting, pots, showdowns, chat)
+  ui.py                presentation layer + a pluggable **Sink**
+
+main.py                terminal front-end   (default: prints via ui.py)
+webapp.py              web front-end         (installs a WebSink; SSE + browser)
+static/                the 2D table (index.html, style.css, app.js)
+```
+
+The engine only ever talks to the outside world through `holdem/ui.py`. By
+default those calls print to the terminal. A front-end can instead install a
+`ui.Sink` on the game thread (`ui.set_sink`): every event is then handed to the
+sink as structured data, and player input is read back through it. `webapp.py`'s
+`WebSink` turns those events into JSON for the browser and feeds clicks back in
+as terminal-style commands. The terminal uses no sink at all, so its behaviour
+is byte-for-byte unchanged.
+
+**Adding a feature:** put the logic in `holdem/` and emit it through a `ui.py`
+function. The terminal renders it by printing; give the `Sink` a matching
+method and have the web front-end (and any future 3D client) render it too, so
+all versions stay in step.
 
 ## Tests
 

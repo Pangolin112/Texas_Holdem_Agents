@@ -1,6 +1,17 @@
-"""Terminal rendering for the game."""
+"""Rendering for the game.
+
+By default every function here writes to the terminal, exactly as before. But
+the engine only ever talks to the outside world through this module, so a
+different front-end (the web app, a future 3D client) can take over by
+installing a *sink* for the current thread with `set_sink`. When a sink is
+active, each event function forwards its structured arguments to the sink
+instead of printing, and `safe_input` reads the player's command from the sink.
+This keeps a single shared game engine driving every version — terminal, web,
+or 3D — with no duplicated game logic.
+"""
 
 import os
+import threading
 
 from .cards import RED_SUITS
 from . import evaluator
@@ -12,6 +23,84 @@ WIDTH = 58
 
 class QuitGame(Exception):
     """Raised when the human wants to leave the table."""
+
+
+# --------------------------------------------------------------------------- #
+# Pluggable presentation sink
+#
+# The terminal is the default (no sink). A non-terminal front-end installs a
+# Sink subclass on its engine thread; the methods below mirror the event
+# functions in this module one-for-one. Defaults are no-ops so a sink only has
+# to override what it cares about. `input` and `human_action` feed player input
+# back into the engine.
+# --------------------------------------------------------------------------- #
+
+class Sink:
+    def out(self, text):
+        pass
+
+    def input(self, prompt):
+        raise QuitGame
+
+    def title_screen(self):
+        pass
+
+    def hand_banner(self, hand_no, sb, bb, dealer_name):
+        pass
+
+    def street_banner(self, street, board, pot):
+        pass
+
+    def chat_line(self, name, text, to):
+        pass
+
+    def announce_action(self, player, desc):
+        pass
+
+    def thinking(self, name):
+        pass
+
+    def warn(self, text):
+        pass
+
+    def show_table(self, view):
+        pass
+
+    def show_help(self):
+        pass
+
+    def reveal_hands(self, players):
+        pass
+
+    def show_showdown(self, contenders, results, already_revealed):
+        pass
+
+    def reveal_all_hands(self, players, board):
+        pass
+
+    def announce_pot(self, text):
+        pass
+
+    def announce_buy(self, player, amount, debt):
+        pass
+
+    def announce_rebuy(self, player, stake, debt, line):
+        pass
+
+    def show_standings(self, players, title):
+        pass
+
+
+_local = threading.local()
+
+
+def set_sink(sink):
+    """Route this thread's game output/input through `sink` (None = terminal)."""
+    _local.sink = sink
+
+
+def get_sink():
+    return getattr(_local, "sink", None)
 
 
 def enable_colors():
@@ -44,11 +133,18 @@ def dim(t):
 
 
 def out(text=""):
+    sink = get_sink()
+    if sink is not None:
+        sink.out(text)
+        return
     if not QUIET:
         print(text)
 
 
 def safe_input(prompt):
+    sink = get_sink()
+    if sink is not None:
+        return sink.input(prompt)
     if QUIET:
         raise QuitGame
     try:
@@ -74,6 +170,10 @@ def name_str(player):
 
 
 def title_screen():
+    sink = get_sink()
+    if sink is not None:
+        sink.title_screen()
+        return
     out()
     out(_c(C.YELLOW, "  ♠ ♥ ♦ ♣   N O - L I M I T   T E X A S   H O L D ' E M   ♣ ♦ ♥ ♠"))
     out(dim("                     you  vs.  the machines"))
@@ -81,6 +181,10 @@ def title_screen():
 
 
 def hand_banner(hand_no, sb, bb, dealer_name):
+    sink = get_sink()
+    if sink is not None:
+        sink.hand_banner(hand_no, sb, bb, dealer_name)
+        return
     out()
     out(_c(C.YELLOW, "═" * WIDTH))
     out(_c(C.YELLOW, " HAND #%d   ·   blinds %d/%d   ·   dealer: %s" % (hand_no, sb, bb, dealer_name)))
@@ -88,12 +192,20 @@ def hand_banner(hand_no, sb, bb, dealer_name):
 
 
 def street_banner(street, board, pot):
+    sink = get_sink()
+    if sink is not None:
+        sink.street_banner(street, board, pot)
+        return
     out()
     board_txt = cards_str(board) if board else dim("(none)")
     out(" %s   board: %s   %s" % (bold("── " + street + " ──"), board_txt, _c(C.YELLOW, "pot %d" % pot)))
 
 
 def chat_line(name, text, to=None):
+    sink = get_sink()
+    if sink is not None:
+        sink.chat_line(name, text, to)
+        return
     if to:
         out(_c(C.MAGENTA, '      %s (to %s): "%s"' % (name, to, text)))
     else:
@@ -101,18 +213,34 @@ def chat_line(name, text, to=None):
 
 
 def announce_action(player, desc):
+    sink = get_sink()
+    if sink is not None:
+        sink.announce_action(player, desc)
+        return
     out("   %s %s." % (name_str(player), desc))
 
 
 def thinking(name):
+    sink = get_sink()
+    if sink is not None:
+        sink.thinking(name)
+        return
     out(dim("   … %s is thinking" % name))
 
 
 def warn(text):
+    sink = get_sink()
+    if sink is not None:
+        sink.warn(text)
+        return
     out(_c(C.RED, "   (!) " + text))
 
 
 def show_table(view):
+    sink = get_sink()
+    if sink is not None:
+        sink.show_table(view)
+        return
     hero = view["hero"]
     out()
     out(dim("─" * WIDTH))
@@ -146,6 +274,10 @@ def show_table(view):
 
 
 def show_help():
+    sink = get_sink()
+    if sink is not None:
+        sink.show_help()
+        return
     out(dim("   f            fold"))
     out(dim("   c            check (if free) / call"))
     out(dim("   r <amount>   raise TO <amount> total this street, e.g. 'r 120'"))
@@ -155,6 +287,10 @@ def show_help():
 
 
 def reveal_hands(players):
+    sink = get_sink()
+    if sink is not None:
+        sink.reveal_hands(players)
+        return
     out()
     out(bold(" ── all-in! hands on the table ──"))
     for p in players:
@@ -162,6 +298,10 @@ def reveal_hands(players):
 
 
 def show_showdown(contenders, results, already_revealed):
+    sink = get_sink()
+    if sink is not None:
+        sink.show_showdown(contenders, results, already_revealed)
+        return
     out()
     out(bold(" ── SHOWDOWN ──"))
     for p in contenders:
@@ -173,6 +313,10 @@ def show_showdown(contenders, results, already_revealed):
 def reveal_all_hands(players, board=None):
     """Peek mode: after the hand, lay every dealt seat's hole cards face up —
     folders included — so you can see what everyone was actually holding."""
+    sink = get_sink()
+    if sink is not None:
+        sink.reveal_all_hands(players, board)
+        return
     dealt = [p for p in players if p.hole]
     if not dealt:
         return
@@ -189,15 +333,27 @@ def reveal_all_hands(players, board=None):
 
 
 def announce_pot(text):
+    sink = get_sink()
+    if sink is not None:
+        sink.announce_pot(text)
+        return
     out(_c(C.YELLOW, "   ● " + text))
 
 
 def announce_buy(player, amount, debt):
+    sink = get_sink()
+    if sink is not None:
+        sink.announce_buy(player, amount, debt)
+        return
     out(_c(C.YELLOW, "   $ %s buys in for %d more chips (tab now %d)."
            % (player.name, amount, debt)))
 
 
 def announce_rebuy(player, stake, debt, line=None):
+    sink = get_sink()
+    if sink is not None:
+        sink.announce_rebuy(player, stake, debt, line)
+        return
     out()
     out(_c(C.YELLOW, " $ %s is felted — the house stakes another %d (tab now %d)."
            % (player.name, stake, debt)))
@@ -206,6 +362,10 @@ def announce_rebuy(player, stake, debt, line=None):
 
 
 def show_standings(players, title="standings"):
+    sink = get_sink()
+    if sink is not None:
+        sink.show_standings(players, title)
+        return
     out()
     out(dim(" %s:" % title))
     for p in sorted(players, key=lambda x: -(x.stack - x.debt)):
