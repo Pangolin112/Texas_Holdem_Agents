@@ -154,7 +154,9 @@ class WebSink(ui.Sink):
                 "net": p.stack - p.debt,
                 "bet": p.bet_street if live else 0,
                 "committed": p.committed if live else 0,
-                "folded": p.folded if live else False,
+                # folded stays true between hands so the summary can dim seats
+                # that mucked; all-in badge is dropped once the hand is over.
+                "folded": p.folded,
                 "all_in": p.all_in if live else False,
                 "is_human": p.is_human,
                 "is_button": (i == g.button_idx),
@@ -168,7 +170,9 @@ class WebSink(ui.Sink):
             "sb": g.sb,
             "bb": g.bb,
             "button": g.button_idx,
-            "board": cards_data(g.board) if live else [],
+            # the board object is only cleared when the next hand starts, so it
+            # persists between hands as the finished-hand summary on the felt.
+            "board": cards_data(g.board),
             "pot": g.pot_total() if live else 0,
             "current_bet": g.current_bet if live else 0,
             "starting_stack": g.starting_stack,

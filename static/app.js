@@ -17,7 +17,14 @@ const G = {
   thinking: null,     // name of the seat currently deciding (transient)
   seatPos: {},        // name -> {x, y} in table % coords
   meta: {},
+  summary: null,      // finished-hand recap, shown until the next deal
 };
+
+function resetSummary() {
+  G.summary = { handNo: G.state ? G.state.hand_no : 0, lines: [], winners: {}, active: false };
+  const el = $("summary");
+  if (el) { el.classList.add("hidden"); el.innerHTML = ""; }
+}
 
 /* ------------------------- setup ------------------------- */
 
@@ -81,6 +88,7 @@ function handle(ev) {
       break;
     case "hand_start":
       clearBubbles(); hideAward();
+      resetSummary();
       G.thinking = null;
       feed(`— Hand #${ev.hand_no} · blinds ${ev.sb}/${ev.bb} · dealer ${ev.dealer} —`, "sys");
       break;
@@ -111,7 +119,7 @@ function handle(ev) {
       break;
     case "pot_award":
       feed(ev.text, "pot");
-      showAward(ev.text);
+      recordAward(ev.text);
       break;
     case "buy":
       feed(`<span class="who">${esc(ev.name)}</span> buys in for ${ev.amount} (tab ${ev.debt}).`, "sys");
@@ -343,14 +351,18 @@ function render() {
     dbtn.style.top = (50 + ry * 0.72 * Math.sin(ang)) + "%";
     dbtn.classList.remove("hidden");
   } else dbtn.classList.add("hidden");
+
+  renderSummary();
 }
 
 function seatEl(seat, x, y) {
   const el = document.createElement("div");
   el.className = "seat" + (seat.is_human ? " hero-seat" : "");
-  if (seat.folded) el.classList.add("folded");
+  const won = (G.summary && G.summary.active) ? (G.summary.winners[seat.name] || 0) : 0;
+  if (seat.folded && !won) el.classList.add("folded");
   const isTurn = (seat.name === G.thinking) || (G.mode === "action" && seat.is_human);
   if (isTurn && G.state.live) el.classList.add("turn");
+  if (won) el.classList.add("winner");
   el.style.left = x + "%"; el.style.top = y + "%";
 
   // cards row
@@ -377,6 +389,12 @@ function seatEl(seat, x, y) {
 
   el.appendChild(cardsRow);
   el.appendChild(body);
+  if (won) {
+    const wb = document.createElement("div");
+    wb.className = "win-badge";
+    wb.textContent = "+" + won;
+    el.appendChild(wb);
+  }
   return el;
 }
 
@@ -440,6 +458,70 @@ function showAward(text) {
   G._awardT = setTimeout(hideAward, 4200);
 }
 function hideAward() { $("award").classList.add("hidden"); }
+
+/* ---- finished-hand summary (stays on the felt until the next deal) ---- */
+
+// The pot-award lines are worded by the engine; pull the winner(s) + amount
+// out so we can glow the seats and stack a "+chips" badge on them. If a line
+// doesn't parse we still show its text — nothing is lost.
+function parseAward(text) {
+  let m;
+  if ((m = text.match(/^(.+?) takes back (\d+)/)))
+    return { names: [m[1].trim()], amount: +m[2] };
+  if ((m = text.match(/^(.+?) split the .*?of (\d+)/)))
+    return { names: m[1].split(" and ").map((s) => s.trim()), amount: +m[2] };
+  if ((m = text.match(/^(.+?) wins? the .*?of (\d+)/)))
+    return { names: [m[1].trim()], amount: +m[2] };
+  return null;
+}
+
+function recordAward(text) {
+  if (!G.summary) resetSummary();
+  G.summary.handNo = G.state ? G.state.hand_no : G.summary.handNo;
+  G.summary.lines.push(text);
+  G.summary.active = true;
+  const w = parseAward(text);
+  if (w) {
+    const share = Math.floor(w.amount / w.names.length);
+    w.names.forEach((n) => { G.summary.winners[n] = (G.summary.winners[n] || 0) + share; });
+    flyChips(w.names);
+  }
+  renderSummary();
+}
+
+function renderSummary() {
+  const el = $("summary");
+  if (!el) return;
+  if (!G.summary || !G.summary.active || !G.summary.lines.length) {
+    el.classList.add("hidden"); return;
+  }
+  el.classList.remove("hidden");
+  el.innerHTML =
+    `<div class="sum-title">Hand #${G.summary.handNo} — result</div>` +
+    G.summary.lines.map((l) => `<div class="sum-line">🏆 ${esc(l)}</div>`).join("");
+}
+
+// a few gold chips sliding from the pot toward each winner
+function flyChips(names) {
+  const table = $("table");
+  names.forEach((n) => {
+    const pos = G.seatPos[n];
+    if (!pos) return;
+    for (let j = 0; j < 6; j++) {
+      const chip = document.createElement("div");
+      chip.className = "fly-chip";
+      chip.style.left = "50%"; chip.style.top = "43%";
+      chip.style.transitionDelay = (j * 70) + "ms";
+      table.appendChild(chip);
+      requestAnimationFrame(() => {
+        chip.style.left = pos.x + "%";
+        chip.style.top = pos.y + "%";
+        chip.style.opacity = "0.15";
+      });
+      setTimeout(() => chip.remove(), 1100 + j * 70);
+    }
+  });
+}
 
 /* ------------------------- feed + standings ------------------------- */
 
