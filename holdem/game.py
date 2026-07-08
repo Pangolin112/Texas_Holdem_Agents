@@ -28,12 +28,14 @@ def looks_like_move_question(text):
 
 
 class TexasHoldemGame:
-    def __init__(self, players, sb=10, bb=20, rng=None, interactive=True):
+    def __init__(self, players, sb=10, bb=20, rng=None, interactive=True,
+                 reveal_all=False):
         self.players = list(players)  # seat order; only players with chips
         self.sb = sb
         self.bb = bb
         self.rng = rng if rng is not None else random.SystemRandom()
         self.interactive = interactive
+        self.reveal_all = reveal_all  # peek mode: show every hand once it's over
         self.starting_stack = players[0].stack if players else 0
         self.button_idx = 0
         self.hand_no = 0
@@ -81,6 +83,9 @@ class TexasHoldemGame:
             return
         while True:
             self.play_hand()
+            if self.reveal_all:
+                # Cards still hold this hand's deal — reset happens next hand.
+                ui.reveal_all_hands(self.hand_players, self.board)
             self.handle_rebuys()
             if max_hands is not None and self.hand_no >= max_hands:
                 break

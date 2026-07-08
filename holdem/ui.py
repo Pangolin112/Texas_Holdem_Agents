@@ -170,6 +170,24 @@ def show_showdown(contenders, results, already_revealed):
                                evaluator.hand_name(rank)))
 
 
+def reveal_all_hands(players, board=None):
+    """Peek mode: after the hand, lay every dealt seat's hole cards face up —
+    folders included — so you can see what everyone was actually holding."""
+    dealt = [p for p in players if p.hole]
+    if not dealt:
+        return
+    out()
+    out(bold(" ── everyone's cards (peek) ──"))
+    for p in dealt:
+        status = dim(" folded") if p.folded else ""
+        hand_txt = ""
+        if board is not None and len(p.hole) + len(board) >= 5:
+            rank, _ = evaluator.best_hand(list(p.hole) + list(board))
+            hand_txt = "  " + evaluator.hand_name(rank)
+        out("   %s  %s%s%s" % (name_str(p).ljust(24), cards_str(p.hole),
+                               status, hand_txt))
+
+
 def announce_pot(text):
     out(_c(C.YELLOW, "   ● " + text))
 

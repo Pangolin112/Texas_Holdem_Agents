@@ -50,6 +50,9 @@ def parse_args():
                              "auto-falls back if unavailable)" % DEFAULT_MODEL)
     parser.add_argument("--offline", action="store_true",
                         help="play without the OpenAI API (built-in bot logic)")
+    parser.add_argument("--show-cards", action="store_true",
+                        help="peek mode: reveal every opponent's hole cards after "
+                             "each hand ends (spoiler — for study/debugging)")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
     return parser.parse_args()
 
@@ -111,9 +114,12 @@ def main():
         print(ui.dim(" deck: seeded shuffle (reproducible) — seed %d" % args.seed))
     else:
         print(ui.dim(" deck: cryptographically random shuffle (OS entropy)"))
+    if args.show_cards:
+        print(ui.dim(" peek mode: everyone's hole cards are revealed after each hand."))
     print(ui.dim(" Type 'h' on your turn for the commands. Good luck.\n"))
 
-    game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng)
+    game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng,
+                           reveal_all=args.show_cards)
     try:
         game.run()
     except (QuitGame, KeyboardInterrupt):
