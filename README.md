@@ -71,6 +71,31 @@ event is streamed to the browser over Server-Sent Events, and your clicks are
 sent back as the very same commands the terminal accepts (`f`, `c`, `r 120`,
 `a`, `say …`, `buy 200`). No poker logic is duplicated in JavaScript.
 
+## Play — online (share a link)
+
+You can put the web version on the internet so **anyone with the link can
+play**, with the LLM opponents running for real. Because GitHub Pages only
+serves static files (no Python, nowhere safe for an API key), the deployment is
+two halves:
+
+- **GitHub Pages** hosts the front-end → `https://<you>.github.io/Texas_Holdem_Agents/`,
+  the link you share.
+- **A hosted backend** (Render's free tier, or any Docker host via the included
+  `Dockerfile`) runs `webapp.py` with your `OPENAI_API_KEY` stored as a server
+  secret — this is where the real game and the AI brains live.
+
+`static/config.js` auto-detects which is which: same-origin when `webapp.py`
+serves the page locally, your hosted backend when GitHub Pages serves it. The
+backend now accepts **several games at once** (one per visitor), sends CORS
+headers so the Pages site may call it, honors `$PORT`, and offers an optional
+`ACCESS_CODE` gate.
+
+> ⚠️ With your key on the backend, every visitor's game spends **your** OpenAI
+> credits. Set an account spending limit, and see the access-code / offline
+> options.
+
+**Step-by-step (Render + GitHub Pages, ~10 min):** see **[DEPLOY.md](DEPLOY.md)**.
+
 ## At the table
 
 On your turn:

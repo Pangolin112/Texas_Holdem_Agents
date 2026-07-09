@@ -1,0 +1,41 @@
+# Publish the web client (static/) to GitHub Pages.
+#
+# The result is https://<user>.github.io/<repo>/ — the public link anyone can
+# open to play. The page's config.js points the browser at your hosted backend
+# (see DEPLOY.md), where the real game + LLM opponents run.
+#
+# One-time setup: repo Settings -> Pages -> Build and deployment ->
+# Source: "GitHub Actions".
+name: Deploy web client to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "static/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: static          # index.html + assets live here
+      - id: deploy
+        uses: actions/deploy-pages@v4

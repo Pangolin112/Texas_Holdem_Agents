@@ -8,6 +8,11 @@
 
 const $ = (id) => document.getElementById(id);
 
+// Where the Python engine (webapp.py) is reachable. Empty string = same origin
+// (webapp.py is serving this page); a full https URL when a GitHub Pages
+// front-end talks to a separately hosted backend. See config.js.
+const API = (window.HOLDEM_BACKEND || "").replace(/\/+$/, "");
+
 const G = {
   sid: null,
   es: null,
@@ -63,19 +68,39 @@ function startGame() {
     show_cards: $("opt-showcards").checked,
     seed: $("opt-seed").value === "" ? null : clampInt($("opt-seed").value, 0, 1e12, null),
   };
-  $("setup-note").textContent = "Shuffling…";
-  fetch("/api/new", {
+  if (G.accessCode) options.access_code = G.accessCode;
+  $("setup-note").textContent = API
+    ? "Dealing you in… (a sleeping free server can take ~30s to wake the first time)"
+    : "Shuffling…";
+  fetch(API + "/api/new", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(options),
   })
-    .then((r) => r.json())
+    .then((r) => {
+      if (r.status === 403) {          // host set an access code — ask and retry
+        const code = prompt("This table needs an access code to sit down:");
+        if (code) { G.accessCode = code; startGame(); }
+        else $("setup-note").textContent = "An access code is required to play.";
+        return null;
+      }
+      return r.json();
+    })
     .then((data) => {
+      if (!data) return;               // 403 branch handled it
+      if (!data.sid) {
+        $("setup-note").textContent = data.error || "Could not start the game.";
+        return;
+      }
       G.sid = data.sid;
       $("setup").classList.add("hidden");
       $("game").classList.remove("hidden");
       connect();
     })
-    .catch((e) => { $("setup-note").textContent = "Could not start: " + e; });
+    .catch(() => {
+      $("setup-note").textContent = API
+        ? "Couldn't reach the game server — it may be waking up. Try again in a moment."
+        : "Could not start the game.";
+    });
 }
 
 function clampInt(v, lo, hi, dflt) {
@@ -87,7 +112,7 @@ function clampInt(v, lo, hi, dflt) {
 /* ------------------------- SSE stream ------------------------- */
 
 function connect() {
-  G.es = new EventSource("/api/events?sid=" + G.sid);
+  G.es = new EventSource(API + "/api/events?sid=" + G.sid);
   G.es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch (_) { return; }
@@ -271,7 +296,7 @@ function act(line) {
 }
 
 function postInput(line) {
-  fetch("/api/input?sid=" + G.sid, {
+  fetch(API + "/api/input?sid=" + G.sid, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ line }),
   }).catch(() => {});
@@ -311,7 +336,7 @@ function sendSay() {
 
 function leaveTable() {
   if (!G.sid) return;
-  fetch("/api/quit?sid=" + G.sid, { method: "POST" }).catch(() => {});
+  fetch(API + "/api/quit?sid=" + G.sid, { method: "POST" }).catch(() => {});
 }
 
 function onGameOver() {

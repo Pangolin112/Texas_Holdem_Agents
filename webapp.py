@@ -405,10 +405,18 @@ def run_game(session):
 
 def start_session(options):
     with SESSIONS_LOCK:
-        # Only one game at a time: retire any previous one.
-        for old in list(SESSIONS.values()):
+        # A public link means several people may be at their own tables at once,
+        # so we keep one session per browser (keyed by sid) instead of the old
+        # single-game behavior. Reap finished games, and cap how many run at
+        # once (MAX_GAMES) so one instance — and the API bill — stays bounded;
+        # over the cap, the oldest table is retired first.
+        for dead in [s for s, sess in SESSIONS.items() if not sess.alive]:
+            SESSIONS.pop(dead, None)
+        max_games = max(1, int(os.environ.get("MAX_GAMES", "12")))
+        while len(SESSIONS) >= max_games:
+            old_sid, old = next(iter(SESSIONS.items()))
             old.stop()
-        SESSIONS.clear()
+            SESSIONS.pop(old_sid, None)
         sid = uuid.uuid4().hex
         session = Session(sid, options)
         SESSIONS[sid] = session
@@ -439,9 +447,19 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ------------------------------------------------------------
 
+    def _cors(self):
+        # Let a GitHub Pages front-end (a different origin) call this backend.
+        # ALLOW_ORIGIN can pin it to one site; "*" (default) allows any.
+        self.send_header("Access-Control-Allow-Origin",
+                         os.environ.get("ALLOW_ORIGIN", "*"))
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Vary", "Origin")
+
     def _json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
+        self._cors()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -462,16 +480,31 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routing ------------------------------------------------------------
 
+    def do_OPTIONS(self):
+        # CORS preflight for the cross-origin POSTs from a Pages front-end.
+        self.send_response(204)
+        self._cors()
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
         if path == "/" or path == "/index.html":
             return self._serve_static("index.html")
+        if path in ("/healthz", "/api/health"):
+            return self._json({"ok": True, "games": len(SESSIONS)})
         if path == "/api/events":
             return self._events(query)
         if path.startswith("/static/"):
             return self._serve_static(path[len("/static/"):])
+        # index.html references its assets as siblings (config.js, app.js,
+        # style.css) so the very same files also work when GitHub Pages serves
+        # them from the site root. Honor root-level asset requests here too.
+        candidate = path.lstrip("/")
+        if candidate and "/" not in candidate and "." in candidate:
+            return self._serve_static(candidate)
         self.send_error(404)
 
     def do_POST(self):
@@ -480,6 +513,13 @@ class Handler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
         if path == "/api/new":
             options = self._read_json()
+            # Optional shared gate: if the host sets ACCESS_CODE, a game only
+            # starts when the browser sends the matching code. Leave it unset to
+            # keep the table open to anyone with the link.
+            code = os.environ.get("ACCESS_CODE", "")
+            if code and str(options.get("access_code", "")) != code:
+                return self._json({"ok": False, "error": "access code required"},
+                                  status=403)
             session = start_session(options)
             return self._json({"sid": session.sid})
         if path == "/api/input":
@@ -510,6 +550,7 @@ class Handler(BaseHTTPRequestHandler):
         with open(full, "rb") as fh:
             body = fh.read()
         self.send_response(200)
+        self._cors()
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
@@ -524,6 +565,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.send_response(200)
+        self._cors()
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")
@@ -556,8 +598,13 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Texas Hold'em — web version")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8000)
+    # A cloud host (Render, Hugging Face Spaces, Fly, ...) injects the port to
+    # bind on as $PORT and expects the server on all interfaces; honor that so
+    # the same file runs locally (127.0.0.1:8000) and deployed with no flags.
+    hosted = bool(os.environ.get("PORT"))
+    parser.add_argument("--host", default="0.0.0.0" if hosted else "127.0.0.1")
+    parser.add_argument("--port", type=int,
+                        default=int(os.environ.get("PORT", "8000")))
     parser.add_argument("--no-browser", action="store_true",
                         help="don't auto-open a browser tab")
     args = parser.parse_args()
@@ -579,7 +626,7 @@ def main():
     if not os.environ.get("OPENAI_API_KEY"):
         print("  note: no OPENAI_API_KEY set -- the web setup screen can still")
         print("        start a game in offline mode (built-in bot logic).")
-    if not args.no_browser:
+    if not args.no_browser and not hosted:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         server.serve_forever()

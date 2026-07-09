@@ -1,0 +1,26 @@
+# Render blueprint — deploy the Texas Hold'em backend (webapp.py) as a free
+# web service that the GitHub Pages front-end talks to.
+#
+# In the Render dashboard:  New +  ->  Blueprint  ->  pick this repo  ->  Apply.
+# Then open the service's  Environment  tab and add your key:
+#     OPENAI_API_KEY = sk-...        (this file deliberately does NOT hold it)
+#
+# Render injects $PORT automatically; webapp.py binds 0.0.0.0:$PORT there.
+services:
+  - type: web
+    name: texas-holdem-agents
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python webapp.py
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false          # set in the dashboard; never commit the key
+      - key: OPENAI_MODEL
+        value: gpt-5.2        # opponents' model (auto-falls back if unavailable)
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      # - key: ACCESS_CODE   # uncomment + set to require a shared code to play
+      #   sync: false
+      # - key: MAX_GAMES     # cap concurrent tables (default 12)
+      #   value: "12"
