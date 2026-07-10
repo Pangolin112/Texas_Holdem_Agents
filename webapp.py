@@ -447,19 +447,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- helpers ------------------------------------------------------------
 
-    def _cors(self):
-        # Let a GitHub Pages front-end (a different origin) call this backend.
-        # ALLOW_ORIGIN can pin it to one site; "*" (default) allows any.
-        self.send_header("Access-Control-Allow-Origin",
-                         os.environ.get("ALLOW_ORIGIN", "*"))
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Vary", "Origin")
-
     def _json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(status)
-        self._cors()
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -480,13 +470,6 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- routing ------------------------------------------------------------
 
-    def do_OPTIONS(self):
-        # CORS preflight for the cross-origin POSTs from a Pages front-end.
-        self.send_response(204)
-        self._cors()
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -499,12 +482,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._events(query)
         if path.startswith("/static/"):
             return self._serve_static(path[len("/static/"):])
-        # index.html references its assets as siblings (config.js, app.js,
-        # style.css) so the very same files also work when GitHub Pages serves
-        # them from the site root. Honor root-level asset requests here too.
-        candidate = path.lstrip("/")
-        if candidate and "/" not in candidate and "." in candidate:
-            return self._serve_static(candidate)
         self.send_error(404)
 
     def do_POST(self):
@@ -550,7 +527,6 @@ class Handler(BaseHTTPRequestHandler):
         with open(full, "rb") as fh:
             body = fh.read()
         self.send_response(200)
-        self._cors()
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
@@ -565,7 +541,6 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         self.send_response(200)
-        self._cors()
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Connection", "keep-alive")

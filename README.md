@@ -73,28 +73,18 @@ sent back as the very same commands the terminal accepts (`f`, `c`, `r 120`,
 
 ## Play — online (share a link)
 
-You can put the web version on the internet so **anyone with the link can
-play**, with the LLM opponents running for real. Because GitHub Pages only
-serves static files (no Python, nowhere safe for an API key), the deployment is
-two halves:
+Deploy `webapp.py` to a host (Render's free tier via `render.yaml`, or any
+Docker host via the included `Dockerfile`) with your `OPENAI_API_KEY` stored as
+a server secret, and the service URL — `https://<your-app>.onrender.com` — is a
+link **anyone can open and play**, LLM opponents included. The server accepts
+**several games at once** (one per visitor, `MAX_GAMES` cap), honors `$PORT`,
+has a `/healthz` check, and offers an optional `ACCESS_CODE` gate.
 
-- **GitHub Pages** hosts the front-end → `https://<you>.github.io/Texas_Holdem_Agents/`,
-  the link you share.
-- **A hosted backend** (Render's free tier, or any Docker host via the included
-  `Dockerfile`) runs `webapp.py` with your `OPENAI_API_KEY` stored as a server
-  secret — this is where the real game and the AI brains live.
-
-`static/config.js` auto-detects which is which: same-origin when `webapp.py`
-serves the page locally, your hosted backend when GitHub Pages serves it. The
-backend now accepts **several games at once** (one per visitor), sends CORS
-headers so the Pages site may call it, honors `$PORT`, and offers an optional
-`ACCESS_CODE` gate.
-
-> ⚠️ With your key on the backend, every visitor's game spends **your** OpenAI
+> ⚠️ With your key on the server, every visitor's game spends **your** OpenAI
 > credits. Set an account spending limit, and see the access-code / offline
-> options.
+> options in the deploy guide.
 
-**Step-by-step (Render + GitHub Pages, ~10 min):** see **[DEPLOY.md](DEPLOY.md)**.
+**Step-by-step (~5 min):** see **[DEPLOY.md](DEPLOY.md)**.
 
 ## At the table
 
