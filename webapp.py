@@ -353,23 +353,27 @@ def build_game(options):
     bb = int(options.get("bb") or 20)
     count = max(1, min(int(options.get("opponents") or 5), len(PERSONALITIES)))
     reveal_all = bool(options.get("show_cards"))
+    # Table language: what the agents speak ("zh" = Chinese, default English).
+    lang = "zh" if str(options.get("language") or "").lower().startswith("zh") else "en"
 
     roster = rng.sample(PERSONALITIES, count)
     players = [HumanPlayer(name, stack)]
     for personality in roster:
         if offline:
-            brain = HeuristicBrain(personality, rng)
+            brain = HeuristicBrain(personality, rng, lang=lang)
         else:
-            brain = LLMBrain(client, model_chain, personality, rng)
+            brain = LLMBrain(client, model_chain, personality, rng, lang=lang)
         players.append(LLMPlayer(personality["name"], stack, personality, brain))
 
-    game = TexasHoldemGame(players, sb=sb, bb=bb, rng=rng, reveal_all=reveal_all)
+    game = TexasHoldemGame(players, sb=sb, bb=bb, rng=rng, reveal_all=reveal_all,
+                           language=lang)
     meta = {
         "note": note,
         "offline": offline,
         "model": None if offline else chosen,
         "seed": seed,
         "show_cards": reveal_all,
+        "language": lang,
         "roster": [p.name for p in players[1:]],
         "hero": name,
     }

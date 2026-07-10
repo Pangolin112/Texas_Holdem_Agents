@@ -8,14 +8,19 @@ from .cards import Deck
 from .players import Action, ALL_IN, CALL, CHECK, FOLD, RAISE
 
 # Phrases that mean "justify your play" rather than idle banter.
+# English and Chinese cues live in one list — the human may type either.
 _STRONG_QUESTION = ("why", "how come", "how could", "how can", "explain",
                     "reasoning", "your logic", "justify", "what were you",
                     "what made you", "walk me through", "what was that",
                     "makes no sense", "make sense", "your thinking",
-                    "what are you thinking", "how is that")
+                    "what are you thinking", "how is that",
+                    "为什么", "为啥", "凭什么", "解释", "说说你", "怎么想",
+                    "什么逻辑", "讲讲", "什么意思", "图什么", "想什么")
 _PLAY_WORDS = ("move", "bet", "raise", "call", "fold", "check", "all in", "all-in",
                "shove", "jam", "bluff", "play", "do that", "did that", "that for",
-               "line", "hand")
+               "line", "hand",
+               "加注", "跟注", "弃牌", "全下", "下注", "过牌", "这手", "那手",
+               "这把", "那把", "唬", "诈")
 
 
 def looks_like_move_question(text):
@@ -24,18 +29,19 @@ def looks_like_move_question(text):
     low = text.lower()
     if any(cue in low for cue in _STRONG_QUESTION):
         return True
-    return "?" in low and any(w in low for w in _PLAY_WORDS)
+    return ("?" in low or "？" in low) and any(w in low for w in _PLAY_WORDS)
 
 
 class TexasHoldemGame:
     def __init__(self, players, sb=10, bb=20, rng=None, interactive=True,
-                 reveal_all=False):
+                 reveal_all=False, language="en"):
         self.players = list(players)  # seat order; only players with chips
         self.sb = sb
         self.bb = bb
         self.rng = rng if rng is not None else random.SystemRandom()
         self.interactive = interactive
         self.reveal_all = reveal_all  # peek mode: show every hand once it's over
+        self.language = language      # what the agents speak ("en" / "zh")
         self.starting_stack = players[0].stack if players else 0
         self.button_idx = 0
         self.hand_no = 0
@@ -193,13 +199,16 @@ class TexasHoldemGame:
                 continue
             p.debt += self.starting_stack
             p.stack = self.starting_stack
-            line = None if p.is_human else getattr(p, "personality", {}).get("broke_line")
+            key = "broke_line_zh" if self.language == "zh" else "broke_line"
+            persona = getattr(p, "personality", {}) or {}
+            line = None if p.is_human else (persona.get(key) or persona.get("broke_line"))
             ui.announce_rebuy(p, self.starting_stack, p.debt, line)
 
     # ------------------------------------------------------------- table talk
 
     GROUP_CUES = ("everyone", "everybody", "you all", "y'all", "you guys",
-                  "you two", "all of you", "anyone", "anybody", "guys", "folks")
+                  "you two", "all of you", "anyone", "anybody", "guys", "folks",
+                  "大家", "各位", "你们", "所有人", "兄弟们", "诸位")
 
     def player_by_name(self, name):
         for p in self.players:

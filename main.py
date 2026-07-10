@@ -54,6 +54,9 @@ def parse_args():
                         help="peek mode: reveal every opponent's hole cards after "
                              "each hand ends (spoiler — for study/debugging)")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
+    parser.add_argument("--lang", choices=("en", "zh"), default="en",
+                        help="table language: what the agents speak "
+                             "(en=English, zh=Chinese; default en)")
     return parser.parse_args()
 
 
@@ -104,9 +107,9 @@ def main():
     players = [HumanPlayer(name[:14], args.stack)]
     for personality in roster:
         if args.offline:
-            brain = HeuristicBrain(personality, rng)
+            brain = HeuristicBrain(personality, rng, lang=args.lang)
         else:
-            brain = LLMBrain(client, model_chain, personality, rng)
+            brain = LLMBrain(client, model_chain, personality, rng, lang=args.lang)
         players.append(LLMPlayer(personality["name"], args.stack, personality, brain))
 
     print(" Tonight's table: " + ", ".join(ui.name_str(p) for p in players[1:]))
@@ -119,7 +122,7 @@ def main():
     print(ui.dim(" Type 'h' on your turn for the commands. Good luck.\n"))
 
     game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng,
-                           reveal_all=args.show_cards)
+                           reveal_all=args.show_cards, language=args.lang)
     try:
         game.run()
     except (QuitGame, KeyboardInterrupt):
