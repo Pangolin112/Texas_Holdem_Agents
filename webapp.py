@@ -96,11 +96,15 @@ class Session:
         self.options = options
         self.outbound = queue.Queue()   # engine -> browser (events)
         self.inbound = queue.Queue()    # browser -> engine (command lines)
+        self.chat_queue = queue.Queue() # browser -> table talk, ANY time
         self.alive = True
         self.last_state = None          # newest full table snapshot (for reconnects)
         self.pending_await = None       # the current input request, if blocked
         self.sink = None
         self.thread = None
+        self.game = None
+        self.tts_client = None          # OpenAI client for /api/tts (None offline)
+        self.voices = {}                # seat name -> (tts voice, style hint)
 
     def emit(self, event):
         if event.get("state") is not None:
@@ -112,6 +116,7 @@ class Session:
             return
         self.alive = False
         self.inbound.put(_QUIT)         # release any blocked input()
+        self.chat_queue.put(_QUIT)      # ...and the chat worker
         self.outbound.put({"type": "closed"})
 
 
@@ -374,16 +379,48 @@ def build_game(options):
         "seed": seed,
         "show_cards": reveal_all,
         "language": lang,
+        # natural agent voices need the API; the browser falls back to its own
+        # speech synthesis when this is False.
+        "tts": client is not None,
         "roster": [p.name for p in players[1:]],
         "hero": name,
     }
-    return game, meta
+    return game, meta, client
+
+
+def chat_worker(session, game, sink):
+    """Session thread that delivers the human's chat OUT-OF-BAND.
+
+    The game thread spends most of its life blocked — inside an opponent's
+    (possibly slow) LLM decision or waiting for the human's move. Lines sent
+    to /api/say land here instead of the input queue, so the table hears the
+    human the moment they speak and answers (selectively, via the engine's own
+    one-reply logic) even while a seat is still thinking. The engine's
+    talk_lock keeps concurrent chat consistent."""
+    ui.set_sink(sink)  # the sink is thread-local: this thread reports too
+    while session.alive:
+        try:
+            text = session.chat_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        if text is _QUIT:
+            break
+        try:
+            if game.human is not None:
+                game.table_talk(game.human, text)
+        except QuitGame:
+            break
+        except Exception as exc:  # a failed reply must never kill the table
+            session.outbound.put({"type": "log", "level": "warn",
+                                  "text": "chat hiccup (%s): %s"
+                                          % (type(exc).__name__, str(exc)[:120])})
+    ui.set_sink(None)
 
 
 def run_game(session):
     """Game-thread target: install the sink, then run the shared engine."""
     try:
-        game, meta = build_game(session.options)
+        game, meta, client = build_game(session.options)
     except Exception as exc:  # setup failure -> tell the browser, don't crash
         session.outbound.put({"type": "fatal", "text": "Could not start game: %s" % exc})
         session.alive = False
@@ -391,7 +428,17 @@ def run_game(session):
 
     sink = WebSink(session, game)
     session.sink = sink
+    session.game = game
+    session.tts_client = client
+    session.voices = {
+        p.name: (p.personality.get("voice", "alloy"),
+                 p.personality.get("tts_style", ""))
+        for p in game.players if hasattr(p, "personality")
+    }
     ui.set_sink(sink)
+    talker = threading.Thread(target=chat_worker, args=(session, game, sink),
+                              daemon=True)
+    talker.start()
     session.outbound.put({"type": "start", "meta": meta, "state": sink.snapshot()})
     try:
         game.run()
@@ -404,6 +451,7 @@ def run_game(session):
     finally:
         session.outbound.put({"type": "game_over", "state": sink.snapshot()})
         session.alive = False
+        session.chat_queue.put(_QUIT)
         ui.set_sink(None)
 
 
@@ -511,12 +559,54 @@ class Handler(BaseHTTPRequestHandler):
             line = body.get("line", "")
             session.inbound.put(line)
             return self._json({"ok": True})
+        if path == "/api/say":
+            # Out-of-band table talk: works at ANY moment of the game, not just
+            # when the engine is waiting for the human's input.
+            session = self._session(query)
+            if session is None or not session.alive:
+                return self._json({"ok": False, "error": "no active game"}, status=409)
+            text = str(self._read_json().get("text", "")).strip()[:200]
+            if text:
+                session.chat_queue.put(text)
+            return self._json({"ok": True})
+        if path == "/api/tts":
+            return self._tts(query)
         if path == "/api/quit":
             session = self._session(query)
             if session is not None:
                 session.stop()
             return self._json({"ok": True})
         self.send_error(404)
+
+    # -- natural agent voices (OpenAI TTS, proxied so the key stays here) ----
+
+    def _tts(self, query):
+        session = self._session(query)
+        if session is None or session.tts_client is None:
+            return self._json({"ok": False, "error": "tts unavailable"}, status=404)
+        body = self._read_json()
+        text = str(body.get("text", "")).strip()[:500]
+        name = str(body.get("name", ""))
+        if not text:
+            return self._json({"ok": False, "error": "no text"}, status=400)
+        voice, style = session.voices.get(name, ("alloy", ""))
+        model = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
+        kwargs = {"model": model, "voice": voice, "input": text,
+                  "response_format": "mp3"}
+        # Style steering exists only on the gpt-4o-mini-tts family.
+        if style and model.startswith("gpt-4o-mini-tts"):
+            kwargs["instructions"] = style
+        try:
+            resp = session.tts_client.audio.speech.create(**kwargs)
+            audio = getattr(resp, "content", None) or resp.read()
+        except Exception as exc:
+            return self._json({"ok": False, "error": str(exc)[:200]}, status=502)
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.send_header("Content-Length", str(len(audio)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(audio)
 
     # -- static files -------------------------------------------------------
 

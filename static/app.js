@@ -57,8 +57,8 @@ const I18N = {
     help_1: "<b>Fold / Check / Call</b> — the middle button knows whether you can check for free or must call.",
     help_2: "<b>Raise</b> — opens a slider; drag it or use the ½·¾·pot shortcuts, then Confirm.",
     help_3: "<b>All-in</b> — shove your whole stack.",
-    help_4: "<b>Say</b> — talk to the table any time. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.",
-    help_5: "<b>Voice</b> — click 🎤 and speak: \"fold\", \"call\", \"raise to 200\", \"all in\" play the move; anything else is table talk. 🔊 lets the agents talk back out loud.",
+    help_4: "<b>Say</b> — talk to the table at any moment, even while someone is thinking; they hear you right away. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.",
+    help_5: "<b>Voice</b> — click 🎤 and speak: \"fold\", \"call\", \"raise to 200\", \"all in\" play the move; anything else is table talk. With 🔊 on, the agents answer out loud in their own natural voices.",
     help_6: "<b>Between hands</b> — buy more chips (added to your tab) or deal the next hand.",
     help_note: "A player can bluff about their cards, but if they announce a move (\"I fold\", \"I'm all in\") the game forces the move to match.",
     got_it: "Got it",
@@ -107,8 +107,8 @@ const I18N = {
     help_1: "<b>弃牌 / 过牌 / 跟注</b> —— 中间的按钮会自动判断你能免费过牌还是必须跟注。",
     help_2: "<b>加注</b> —— 打开滑块；拖动它或用 半池·¾池·一池 快捷键，然后点确定。",
     help_3: "<b>全下</b> —— 推入你的全部筹码。",
-    help_4: "<b>说话</b> —— 随时和牌桌聊天。点名谁，谁就会回答；问他们<i>为什么</i>那么打，他们会解释真实的思路。",
-    help_5: "<b>语音</b> —— 点 🎤 开口说：“弃牌”“跟注”“加注到 200”“全下”会直接出牌；说别的就是牌桌聊天。开着 🔊，对手们会开口回话。",
+    help_4: "<b>说话</b> —— 任何时刻都能和牌桌聊天，哪怕有人正在思考，他们也立刻听得见。点名谁，谁就会回答；问他们<i>为什么</i>那么打，他们会解释真实的思路。",
+    help_5: "<b>语音</b> —— 点 🎤 开口说：“弃牌”“跟注”“加注到 200”“全下”会直接出牌；说别的就是牌桌聊天。开着 🔊，对手们会用各自自然的嗓音开口回话。",
     help_6: "<b>两手之间</b> —— 买更多筹码（记在账上）或发下一手。",
     help_note: "玩家可以在牌上虚张声势，但只要嘴上宣布了动作（“我弃了”“我全下”），游戏会强制动作和话一致。",
     got_it: "明白",
@@ -548,15 +548,24 @@ $("buy-go").addEventListener("click", () => {
   if (amt > 0) postInput("buy " + amt);
 });
 
-/* say box: normally "say X"; in text mode sends the raw line */
+/* say box: table talk goes out-of-band (/api/say) so it works at ANY moment —
+ * even while an opponent is thinking. A rare "text" prompt (e.g. a confirm)
+ * still answers the engine's pending input directly. */
 $("say-go").addEventListener("click", sendSay);
 $("say-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendSay(); });
 function sendSay() {
   const txt = $("say-input").value.trim();
   if (!txt) return;
   $("say-input").value = "";
-  postInput(G.mode === "text" ? txt : "say " + txt);
-  if (G.mode === "text") G.mode = null;
+  if (G.mode === "text") { postInput(txt); G.mode = null; return; }
+  sendChat(txt);
+}
+
+function sendChat(text) {
+  fetch("/api/say?sid=" + G.sid, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  }).catch(() => {});
 }
 
 function leaveTable() {

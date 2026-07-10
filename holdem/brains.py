@@ -64,6 +64,8 @@ PERSONALITIES = [
         "taunts_zh": ["来啊，倒是有人跟我一注啊。", "又弃牌？服了你们了。",
                       "跟你说，我从头到尾都吃定你了。"],
         "broke_line_zh": "行行行，再给我记一笔账上。",
+        "voice": "ash",
+        "tts_style": "Loud, warm, boisterous middle-aged man teasing his poker buddies.",
     },
     {
         "name": "Sarah",
@@ -76,6 +78,8 @@ PERSONALITIES = [
         "taunts_zh": ["就说一句，你这注下得毫无道理。", "我弃了，我的钱我心疼。",
                       "你每次到河牌都来这一套。"],
         "broke_line_zh": "所以我平时才不怎么赌。行吧，再来一次。",
+        "voice": "sage",
+        "tts_style": "Dry, precise, unimpressed; flat deadpan one-liners.",
     },
     {
         "name": "Emma",
@@ -89,6 +93,8 @@ PERSONALITIES = [
         "taunts_zh": ["我知道该弃牌，但我偏不。", "今晚大家怎么都这么严肃啊？",
                       "好吧，就再跟这一次，下不为例。"],
         "broke_line_zh": "哎呀。再借我一个买入呗？我肯定还，真的。",
+        "voice": "coral",
+        "tts_style": "Bright, chatty student — quick, friendly, easily sidetracked.",
     },
     {
         "name": "Dave",
@@ -102,6 +108,8 @@ PERSONALITIES = [
         "taunts_zh": ["别磨叽了，来点真的。", "你没牌，我看得出来。",
                       "行，拿去。没有下次了。"],
         "broke_line_zh": "无所谓。再给我上一份，我赢回来。",
+        "voice": "onyx",
+        "tts_style": "Blunt, gravelly and direct; good-natured trash talk.",
     },
     {
         "name": "Linda",
@@ -114,6 +122,8 @@ PERSONALITIES = [
         "taunts_zh": ["你两手牌之前也是这么干的。", "我等得起，我这人特别有耐心。",
                       "就凭一个“说不定”，下这么多筹码？"],
         "broke_line_zh": "好吧，就当交学费了。麻烦记我账上。",
+        "voice": "shimmer",
+        "tts_style": "Calm, patient older woman needling people gently, with a smile.",
     },
     {
         "name": "Frank",
@@ -126,6 +136,8 @@ PERSONALITIES = [
         "taunts_zh": ["该轮到我了，我感觉来了。", "一个钟头没摸到一张好牌了。",
                       "这会儿可不能弃，我正顺着呢。"],
         "broke_line_zh": "今晚牌太背了。再来一摞，之后我老实点。",
+        "voice": "verse",
+        "tts_style": "Easygoing and amused, a believer in hot streaks; laughs easily.",
     },
     {
         "name": "Ray",
@@ -136,6 +148,8 @@ PERSONALITIES = [
         "broke_line": "Hm. Put it on the bill.",
         "taunts_zh": ["行。", "你定。", "夜还长。"],
         "broke_line_zh": "嗯，记账上。",
+        "voice": "echo",
+        "tts_style": "Quiet, flat, minimal. Short sentences, unhurried.",
     },
 ]
 

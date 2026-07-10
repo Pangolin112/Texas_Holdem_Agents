@@ -1,20 +1,26 @@
 /* ===================== Texas Hold'em — voice in/out =====================
- * Loaded after app.js; shares its globals (G, t, act, postInput, feed, esc).
+ * Loaded after app.js; shares its globals (G, t, act, postInput, sendChat,
+ * feed, esc).
  *
- * OUT — the agents speak: every chat line / broke-line an opponent says is
- *   read aloud with the browser's built-in speechSynthesis, in the table
- *   language (zh-CN / en-US). Toggle with the 🔊 button; no API, no cost.
+ * OUT — the agents speak with natural voices: each opponent line is sent to
+ *   the server's /api/tts, which proxies OpenAI's speech API (the key never
+ *   reaches the browser) with a per-personality voice and delivery style.
+ *   Only the words are spoken — never the speaker's name. Offline games (or
+ *   a TTS hiccup) fall back to the browser's built-in speechSynthesis.
+ *   Toggle with the 🔊 button.
  *
  * IN — you speak: the 🎤 button uses the Web Speech API (Chrome/Edge; needs
  *   HTTPS or localhost). On your turn, "fold", "call", "check", "raise to
  *   200", "all in" — or 弃牌 / 跟注 / 过牌 / 加注到200 / 全下 — play the move
- *   directly; anything else is sent as table talk, exactly like the Say box.
+ *   directly; anything else is table talk, delivered instantly whatever the
+ *   game is doing (even mid-thinking), exactly like the Say box.
  *   Between hands: "next hand" / 下一手 deals, "buy 200" / 买200 tops up.
  * ======================================================================= */
 
 const Voice = {
   ttsOn: localStorage.getItem("holdem_tts") !== "0",
-  pending: 0,          // utterances queued but not finished (cap the backlog)
+  queue: [],           // spoken lines waiting their turn (one at a time)
+  playing: false,
   rec: null,
   listening: false,
 };
@@ -23,25 +29,51 @@ function voiceLang() { return G.lang === "zh" ? "zh-CN" : "en-US"; }
 
 /* ------------------------- output: agents talk ------------------------- */
 
-function pickVoice() {
-  const want = voiceLang();
-  const voices = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-  return voices.find((v) => v.lang === want)
-      || voices.find((v) => v.lang && v.lang.indexOf(want.slice(0, 2)) === 0)
-      || null;
+/* app.js calls speak(name, text) for every opponent chat line. The name only
+ * selects the voice — it is never spoken aloud. */
+function speak(name, text) {
+  if (!Voice.ttsOn) return;
+  if (Voice.queue.length >= 3) return;   // table's chatty — don't build a backlog
+  Voice.queue.push({ name, text });
+  pumpSpeech();
 }
 
-/* app.js calls speak(name, text) for every opponent chat line */
-function speak(name, text) {
-  if (!Voice.ttsOn || !("speechSynthesis" in window)) return;
-  if (Voice.pending > 2) return;        // table's chatty — don't build a backlog
-  const u = new SpeechSynthesisUtterance(name ? name + ": " + text : text);
-  u.lang = voiceLang();
-  const v = pickVoice();
+function pumpSpeech() {
+  if (Voice.playing || !Voice.queue.length) return;
+  const item = Voice.queue.shift();
+  Voice.playing = true;
+  const done = () => { Voice.playing = false; pumpSpeech(); };
+
+  if (!G.meta.tts || !G.sid) { speakFallback(item.text, done); return; }
+  fetch("/api/tts?sid=" + G.sid, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: item.name, text: item.text }),
+  })
+    .then((r) => {
+      if (!r.ok) throw new Error("tts " + r.status);
+      return r.blob();
+    })
+    .then((blob) => {
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = audio.onerror = () => { URL.revokeObjectURL(url); done(); };
+      return audio.play().catch(() => { URL.revokeObjectURL(url); done(); });
+    })
+    .catch(() => speakFallback(item.text, done));   // offline / error → browser voice
+}
+
+/* plain browser speech synthesis — the no-API fallback */
+function speakFallback(text, done) {
+  if (!("speechSynthesis" in window)) { done(); return; }
+  const u = new SpeechSynthesisUtterance(text);
+  const want = voiceLang();
+  u.lang = want;
+  const voices = speechSynthesis.getVoices();
+  const v = voices.find((x) => x.lang === want)
+        || voices.find((x) => x.lang && x.lang.indexOf(want.slice(0, 2)) === 0);
   if (v) u.voice = v;
   u.rate = 1.05;
-  Voice.pending++;
-  u.onend = u.onerror = () => { Voice.pending = Math.max(0, Voice.pending - 1); };
+  u.onend = u.onerror = done;
   speechSynthesis.speak(u);
 }
 
@@ -54,7 +86,10 @@ function updateTtsButton() {
 $("btn-tts").addEventListener("click", () => {
   Voice.ttsOn = !Voice.ttsOn;
   localStorage.setItem("holdem_tts", Voice.ttsOn ? "1" : "0");
-  if (!Voice.ttsOn && window.speechSynthesis) speechSynthesis.cancel();
+  if (!Voice.ttsOn) {
+    Voice.queue.length = 0;
+    if (window.speechSynthesis) speechSynthesis.cancel();
+  }
   updateTtsButton();
 });
 
@@ -120,9 +155,9 @@ function handleVoiceResult(text) {
   if (!text) return;
   feed(`🎤 <span class="dim">${t("heard")}:</span> ${esc(text)}`, "sys");
   const cmd = voiceCommand(text);
-  if (cmd === null) {                       // not a move — table talk
-    postInput(G.mode === "text" ? text : "say " + text);
-    if (G.mode === "text") G.mode = null;
+  if (cmd === null) {                       // not a move — table talk, any time
+    if (G.mode === "text") { postInput(text); G.mode = null; }
+    else sendChat(text);
     return;
   }
   if (cmd === "") {                         // "next hand"

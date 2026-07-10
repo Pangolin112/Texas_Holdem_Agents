@@ -84,10 +84,25 @@ has the same agent-language switch via `--lang zh`.)
 *"raise to 200"*, *"all in"*, or in Chinese *“弃牌”“跟注”“加注到200”“全下”* —
 and it plays; anything else you say is sent as table talk, exactly like the Say
 box (*"next hand"* / *“下一手”* deals between hands, *"buy 200"* / *“买200”*
-tops up). With **🔊** on, the agents talk back out loud in the table language.
-Both use the browser's built-in Web Speech API — no extra API keys, no cost;
-speech input needs Chrome/Edge over HTTPS or localhost (the button hides
-itself where unsupported).
+tops up). Speech input uses the browser's Web Speech API (Chrome/Edge over
+HTTPS or localhost; the button hides itself where unsupported).
+
+With **🔊** on, the agents talk back out loud in **natural voices**: their
+lines are spoken through **OpenAI's TTS** (`gpt-4o-mini-tts`), each personality
+with its own voice and delivery — Mike booms, Sarah deadpans, Ray barely
+bothers. Only the words are spoken, never the speaker's name. The audio is
+generated server-side (`/api/tts`), so the API key stays on the server; TTS
+audio, like the table's brains, spends the host's OpenAI credits. Offline
+games (or any TTS hiccup) fall back to the browser's built-in voice
+automatically.
+
+**Talk whenever you want.** The Say box and the mic work at *any* moment — not
+just on your turn. Speak while an opponent is still thinking and the table
+hears you immediately: the same selective-reply rules apply (name someone and
+they answer, question a move and you get the real reasoning, a table-wide
+remark draws at most one voice). Under the hood the web app delivers chat on a
+separate thread (`/api/say`), so a slow model decision never blocks the
+conversation.
 
 ## Play — online (share a link)
 

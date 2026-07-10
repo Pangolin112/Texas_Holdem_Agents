@@ -2,6 +2,7 @@
 
 import random
 import re
+import threading
 
 from . import evaluator, ui
 from .cards import Deck
@@ -46,6 +47,12 @@ class TexasHoldemGame:
         self.button_idx = 0
         self.hand_no = 0
         self.memory = []  # one-line summaries of past hands, fed to the AIs
+        # Serializes all chat delivery. Re-entrant because a reply is delivered
+        # from inside delivering the line it answers. A front-end may call
+        # table_talk() from another thread (the web app lets the human speak at
+        # ANY time, even while a seat is mid-decision) — the lock keeps the
+        # chat log and the one-reply rule consistent across threads.
+        self.talk_lock = threading.RLock()
 
         # per-hand state
         self.board = []
@@ -250,7 +257,9 @@ class TexasHoldemGame:
         return None
 
     def table_talk(self, speaker, text):
-        """Entry point for a spoken line (human `say` or between-hands chat)."""
+        """Entry point for a spoken line (human `say` or between-hands chat).
+        Safe to call from any thread — a web front-end calls it out-of-band so
+        the human can speak whenever they like, and the table still answers."""
         self.deliver_chat(speaker, text)
 
     def reaction_chance(self, desc):
@@ -286,6 +295,10 @@ class TexasHoldemGame:
         text = " ".join(text.split())[:max_len]
         if not text:
             return
+        with self.talk_lock:
+            self._deliver_chat_locked(speaker, text, in_action, solicit, force_to)
+
+    def _deliver_chat_locked(self, speaker, text, in_action, solicit, force_to):
         if force_to is not None:
             addressees = [force_to]
             to_name = force_to.name
