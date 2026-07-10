@@ -19,8 +19,8 @@
 
 const Voice = {
   ttsOn: localStorage.getItem("holdem_tts") !== "0",
-  queue: [],           // spoken lines waiting their turn (one at a time)
-  playing: false,
+  chains: {},          // speaker -> promise chain: nobody talks over THEMSELF
+  active: new Set(),   // Audio elements currently sounding (cap + mute)
   rec: null,
   listening: false,
 };
@@ -29,29 +29,39 @@ const Voice = {
 // stays natural). Applies to both the OpenAI audio and the fallback voice.
 const SPEECH_RATE = 1.3;
 
+// How many voices may sound at once. Different speakers overlap like a real
+// table; past this it's just noise, so extra lines wait.
+const MAX_OVERLAP = 3;
+
 function voiceLang() { return G.lang === "zh" ? "zh-CN" : "en-US"; }
 
 /* ------------------------- output: agents talk ------------------------- */
 
 /* app.js calls speak(name, text) for every opponent chat line. The name only
- * selects the voice — it is never spoken aloud. */
+ * selects the voice — it is never spoken aloud.
+ *
+ * To keep the audio in step with the text, the TTS request starts the moment
+ * the line appears. Playback is chained per speaker (your own lines stay in
+ * order) but NOT across speakers — two people answering each other can talk
+ * over one another, exactly like a real table. */
 function speak(name, text) {
   if (!Voice.ttsOn) return;
-  if (Voice.queue.length >= 3) return;   // table's chatty — don't build a backlog
-  Voice.queue.push({ name, text });
-  pumpSpeech();
+  const prepared = prepareAudio(name, text);          // fetch starts NOW
+  const prev = Voice.chains[name] || Promise.resolve();
+  Voice.chains[name] = prev
+    .then(() => prepared)
+    .then((play) => (play ? play() : null))
+    .catch(() => {});
 }
 
-function pumpSpeech() {
-  if (Voice.playing || !Voice.queue.length) return;
-  const item = Voice.queue.shift();
-  Voice.playing = true;
-  const done = () => { Voice.playing = false; pumpSpeech(); };
-
-  if (!G.meta.tts || !G.sid) { speakFallback(item.text, done); return; }
-  fetch("/api/tts?sid=" + G.sid, {
+/* Resolve to a zero-arg "play" function once the audio is ready. */
+function prepareAudio(name, text) {
+  if (!G.meta.tts || !G.sid) {
+    return Promise.resolve(() => fallbackLine(text));
+  }
+  return fetch("/api/tts?sid=" + G.sid, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name: item.name, text: item.text }),
+    body: JSON.stringify({ name, text }),
   })
     .then((r) => {
       if (!r.ok) throw new Error("tts " + r.status);
@@ -59,28 +69,41 @@ function pumpSpeech() {
     })
     .then((blob) => {
       const url = URL.createObjectURL(blob);
-      const audio = new Audio(url);
-      audio.defaultPlaybackRate = SPEECH_RATE;
-      audio.playbackRate = SPEECH_RATE;
-      audio.onended = audio.onerror = () => { URL.revokeObjectURL(url); done(); };
-      return audio.play().catch(() => { URL.revokeObjectURL(url); done(); });
+      return () => playUrl(url);
     })
-    .catch(() => speakFallback(item.text, done));   // offline / error → browser voice
+    .catch(() => () => fallbackLine(text));   // offline / error → browser voice
 }
 
-/* plain browser speech synthesis — the no-API fallback */
-function speakFallback(text, done) {
-  if (!("speechSynthesis" in window)) { done(); return; }
-  const u = new SpeechSynthesisUtterance(text);
-  const want = voiceLang();
-  u.lang = want;
-  const voices = speechSynthesis.getVoices();
-  const v = voices.find((x) => x.lang === want)
-        || voices.find((x) => x.lang && x.lang.indexOf(want.slice(0, 2)) === 0);
-  if (v) u.voice = v;
-  u.rate = SPEECH_RATE;
-  u.onend = u.onerror = done;
-  speechSynthesis.speak(u);
+function playUrl(url) {
+  return new Promise((resolve) => {
+    if (!Voice.ttsOn || Voice.active.size >= MAX_OVERLAP) {
+      URL.revokeObjectURL(url); resolve(); return;
+    }
+    const audio = new Audio(url);
+    audio.defaultPlaybackRate = SPEECH_RATE;
+    audio.playbackRate = SPEECH_RATE;
+    Voice.active.add(audio);
+    const done = () => { Voice.active.delete(audio); URL.revokeObjectURL(url); resolve(); };
+    audio.onended = audio.onerror = done;
+    audio.play().catch(done);
+  });
+}
+
+/* plain browser speech synthesis — the no-API fallback (serial by nature) */
+function fallbackLine(text) {
+  return new Promise((resolve) => {
+    if (!Voice.ttsOn || !("speechSynthesis" in window)) { resolve(); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    const want = voiceLang();
+    u.lang = want;
+    const voices = speechSynthesis.getVoices();
+    const v = voices.find((x) => x.lang === want)
+          || voices.find((x) => x.lang && x.lang.indexOf(want.slice(0, 2)) === 0);
+    if (v) u.voice = v;
+    u.rate = SPEECH_RATE;
+    u.onend = u.onerror = () => resolve();
+    speechSynthesis.speak(u);
+  });
 }
 
 function updateTtsButton() {
@@ -92,8 +115,10 @@ function updateTtsButton() {
 $("btn-tts").addEventListener("click", () => {
   Voice.ttsOn = !Voice.ttsOn;
   localStorage.setItem("holdem_tts", Voice.ttsOn ? "1" : "0");
-  if (!Voice.ttsOn) {
-    Voice.queue.length = 0;
+  if (!Voice.ttsOn) {   // silence everything already sounding or queued
+    Voice.chains = {};
+    Voice.active.forEach((a) => { try { a.pause(); } catch (e) {} });
+    Voice.active.clear();
     if (window.speechSynthesis) speechSynthesis.cancel();
   }
   updateTtsButton();
