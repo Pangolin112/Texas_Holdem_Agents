@@ -4,46 +4,52 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Texas Hold'em — you vs. the machines</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
 <!-- ===================== SETUP SCREEN ===================== -->
 <div id="setup" class="overlay">
   <div class="setup-card">
-    <h1>♠ ♥ ♦ ♣<br><span>No-Limit Texas Hold'em</span></h1>
-    <p class="tag">You, against a table of AI regulars.</p>
+    <h1>♠ ♥ ♦ ♣<br><span data-i18n="title_sub">No-Limit Texas Hold'em</span></h1>
+    <p class="tag" data-i18n="tagline">You, against a table of AI regulars.</p>
 
     <div class="form-grid">
-      <label>Your name
+      <label><span data-i18n="lbl_name">Your name</span>
         <input id="opt-name" type="text" value="You" maxlength="14" autocomplete="off">
       </label>
-      <label>Opponents
+      <label><span data-i18n="lbl_lang">Language / 语言</span>
+        <select id="opt-lang">
+          <option value="en">English</option>
+          <option value="zh">中文</option>
+        </select>
+      </label>
+      <label><span data-i18n="lbl_opponents">Opponents</span>
         <input id="opt-opponents" type="number" min="1" max="7" value="5">
       </label>
-      <label>Starting stack
+      <label><span data-i18n="lbl_stack">Starting stack</span>
         <input id="opt-stack" type="number" min="20" step="10" value="1000">
       </label>
-      <label>Small blind
+      <label><span data-i18n="lbl_sb">Small blind</span>
         <input id="opt-sb" type="number" min="1" value="10">
       </label>
-      <label>Big blind
+      <label><span data-i18n="lbl_bb">Big blind</span>
         <input id="opt-bb" type="number" min="2" value="20">
       </label>
-      <label>Model
+      <label><span data-i18n="lbl_model">Model</span>
         <input id="opt-model" type="text" value="gpt-5.2" placeholder="gpt-5.2">
       </label>
     </div>
 
     <div class="check-row">
-      <label class="check"><input id="opt-offline" type="checkbox"> Offline (built-in bots, no API)</label>
-      <label class="check"><input id="opt-showcards" type="checkbox"> Peek mode (reveal cards after each hand)</label>
+      <label class="check"><input id="opt-offline" type="checkbox"> <span data-i18n="chk_offline">Offline (built-in bots, no API)</span></label>
+      <label class="check"><input id="opt-showcards" type="checkbox"> <span data-i18n="chk_peek">Peek mode (reveal cards after each hand)</span></label>
     </div>
-    <label class="seed-row">Seed (optional, reproducible deck)
-      <input id="opt-seed" type="number" placeholder="random">
+    <label class="seed-row"><span data-i18n="lbl_seed">Seed (optional, reproducible deck)</span>
+      <input id="opt-seed" type="number" placeholder="random" data-i18n-ph="ph_seed">
     </label>
 
-    <button id="deal-in" class="primary big">Deal me in</button>
+    <button id="deal-in" class="primary big" data-i18n="deal_in">Deal me in</button>
     <p id="setup-note" class="note"></p>
   </div>
 </div>
@@ -53,11 +59,13 @@
   <header id="topbar">
     <span class="brand">♠♥♦♣ Hold'em</span>
     <span id="hand-label" class="pill">—</span>
-    <span id="blinds-label" class="pill dim">blinds —</span>
+    <span id="blinds-label" class="pill dim">—</span>
     <span id="mode-label" class="pill dim"></span>
     <span class="spacer"></span>
+    <button id="btn-tts" class="ghost" title="Voice output on/off">🔊</button>
+    <button id="btn-lang" class="ghost" title="Language / 语言">中文</button>
     <button id="btn-help" class="ghost" title="How to play">?</button>
-    <button id="btn-leave" class="ghost danger" title="Leave the table">Leave</button>
+    <button id="btn-leave" class="ghost danger" data-i18n="leave" title="Leave the table">Leave</button>
   </header>
 
   <div id="content">
@@ -85,7 +93,7 @@
 
   <!-- event / chat feed (history board) -->
   <aside id="feed">
-    <div class="feed-head">Table feed</div>
+    <div class="feed-head" data-i18n="feed_head">Table feed</div>
     <div id="feed-list"></div>
   </aside>
   </div><!-- /content -->
@@ -96,24 +104,24 @@
 
     <div id="controls" class="controls disabled">
       <div class="action-row">
-        <button id="act-fold" class="act fold">Fold</button>
-        <button id="act-call" class="act call">Check</button>
-        <button id="act-raise" class="act raise">Raise</button>
-        <button id="act-allin" class="act allin">All-in</button>
+        <button id="act-fold" class="act fold" data-i18n="fold">Fold</button>
+        <button id="act-call" class="act call" data-i18n="check">Check</button>
+        <button id="act-raise" class="act raise" data-i18n="raise">Raise</button>
+        <button id="act-allin" class="act allin" data-i18n="allin">All-in</button>
       </div>
       <div id="raise-panel" class="raise-panel hidden">
         <div class="raise-quick">
-          <button data-frac="0.5" class="chip-btn">½ pot</button>
-          <button data-frac="0.75" class="chip-btn">¾ pot</button>
-          <button data-frac="1" class="chip-btn">pot</button>
-          <button data-frac="min" class="chip-btn">min</button>
-          <button data-frac="max" class="chip-btn">max</button>
+          <button data-frac="0.5" class="chip-btn" data-i18n="half_pot">½ pot</button>
+          <button data-frac="0.75" class="chip-btn" data-i18n="threeq_pot">¾ pot</button>
+          <button data-frac="1" class="chip-btn" data-i18n="one_pot">pot</button>
+          <button data-frac="min" class="chip-btn" data-i18n="min">min</button>
+          <button data-frac="max" class="chip-btn" data-i18n="max">max</button>
         </div>
         <input id="raise-slider" type="range" min="0" max="100" value="0">
         <div class="raise-confirm">
-          <span>raise to</span>
+          <span data-i18n="raise_to">raise to</span>
           <input id="raise-amount" type="number" class="raise-amount">
-          <button id="raise-go" class="primary">Confirm</button>
+          <button id="raise-go" class="primary" data-i18n="confirm">Confirm</button>
         </div>
       </div>
     </div>
@@ -121,19 +129,20 @@
     <!-- between-hands controls -->
     <div id="between" class="between disabled">
       <div class="between-actions">
-        <button id="next-hand" class="primary big">Next hand ▸</button>
+        <button id="next-hand" class="primary big" data-i18n="next_hand">Next hand ▸</button>
         <div class="buy-box">
-          <span>Buy chips</span>
+          <span data-i18n="buy_chips">Buy chips</span>
           <input id="buy-amount" type="number" min="0" value="0">
-          <button id="buy-go" class="ghost">Top up</button>
+          <button id="buy-go" class="ghost" data-i18n="top_up">Top up</button>
           <span id="buy-allow" class="dim"></span>
         </div>
       </div>
     </div>
 
     <div class="say-row">
-      <input id="say-input" type="text" placeholder="Say something to the table…  (they hear you and answer)" maxlength="200">
-      <button id="say-go" class="ghost">Say</button>
+      <button id="btn-mic" class="ghost mic" title="Speak instead of typing">🎤</button>
+      <input id="say-input" type="text" placeholder="Say something to the table…  (they hear you and answer)" data-i18n-ph="ph_say" maxlength="200">
+      <button id="say-go" class="ghost" data-i18n="say">Say</button>
     </div>
   </section>
 </div>
@@ -141,20 +150,21 @@
 <!-- help modal -->
 <div id="help" class="overlay hidden">
   <div class="setup-card small">
-    <h2>How to play</h2>
+    <h2 data-i18n="help_title">How to play</h2>
     <ul class="help-list">
-      <li><b>Fold / Check / Call</b> — the middle button knows whether you can check for free or must call.</li>
-      <li><b>Raise</b> — opens a slider; drag it or use the ½·¾·pot shortcuts, then Confirm.</li>
-      <li><b>All-in</b> — shove your whole stack.</li>
-      <li><b>Say</b> — talk to the table any time. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.</li>
-      <li><b>Between hands</b> — buy more chips (added to your tab) or deal the next hand.</li>
+      <li data-i18n="help_1"><b>Fold / Check / Call</b> — the middle button knows whether you can check for free or must call.</li>
+      <li data-i18n="help_2"><b>Raise</b> — opens a slider; drag it or use the ½·¾·pot shortcuts, then Confirm.</li>
+      <li data-i18n="help_3"><b>All-in</b> — shove your whole stack.</li>
+      <li data-i18n="help_4"><b>Say</b> — talk to the table any time. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.</li>
+      <li data-i18n="help_5"><b>Voice</b> — click 🎤 and speak: "fold", "call", "raise to 200", "all in" play the move; anything else is table talk. 🔊 lets the agents talk back out loud.</li>
+      <li data-i18n="help_6"><b>Between hands</b> — buy more chips (added to your tab) or deal the next hand.</li>
     </ul>
-    <p class="dim">A player can bluff about their cards, but if they announce a move ("I fold", "I'm all in") the game forces the move to match.</p>
-    <button id="help-close" class="primary">Got it</button>
+    <p class="dim" data-i18n="help_note">A player can bluff about their cards, but if they announce a move ("I fold", "I'm all in") the game forces the move to match.</p>
+    <button id="help-close" class="primary" data-i18n="got_it">Got it</button>
   </div>
 </div>
 
-<script src="config.js"></script>
-<script src="app.js"></script>
+<script src="/static/app.js"></script>
+<script src="/static/voice.js"></script>
 </body>
 </html>

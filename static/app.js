@@ -3,15 +3,200 @@
  * for the live game stream, POST /api/input to send the same command strings
  * the terminal accepts ("f", "c", "r 120", "a", "say ...", "buy 200").
  * The engine (and the AI brains) live entirely in Python — this file only
- * draws the table and forwards clicks.
+ * draws the table and forwards clicks. UI language is handled here (EN/中文):
+ * the engine always emits English event text, and the client translates the
+ * few fixed phrase shapes for display. voice.js adds speech in/out on top.
  * ==================================================================== */
 
 const $ = (id) => document.getElementById(id);
 
-// Where the Python engine (webapp.py) is reachable. Empty string = same origin
-// (webapp.py is serving this page); a full https URL when a GitHub Pages
-// front-end talks to a separately hosted backend. See config.js.
-const API = (window.HOLDEM_BACKEND || "").replace(/\/+$/, "");
+/* ------------------------- i18n ------------------------- */
+
+const I18N = {
+  en: {
+    page_title: "Texas Hold'em — you vs. the machines",
+    title_sub: "No-Limit Texas Hold'em",
+    tagline: "You, against a table of AI regulars.",
+    lbl_name: "Your name", lbl_lang: "Language / 语言", lbl_opponents: "Opponents",
+    lbl_stack: "Starting stack", lbl_sb: "Small blind", lbl_bb: "Big blind",
+    lbl_model: "Model",
+    chk_offline: "Offline (built-in bots, no API)",
+    chk_peek: "Peek mode (reveal cards after each hand)",
+    lbl_seed: "Seed (optional, reproducible deck)", ph_seed: "random",
+    deal_in: "Deal me in",
+    shuffling: "Shuffling…",
+    access_prompt: "This table needs an access code to sit down:",
+    access_required: "An access code is required to play.",
+    start_failed: "Could not start the game.",
+    leave: "Leave", feed_head: "Table feed",
+    fold: "Fold", check: "Check", raise: "Raise", allin: "All-in",
+    call_n: "Call {n}", call_allin: "Call {n} (all-in)",
+    half_pot: "½ pot", threeq_pot: "¾ pot", one_pot: "pot", min: "min", max: "max",
+    raise_to: "raise to", confirm: "Confirm",
+    next_hand: "Next hand ▸", buy_chips: "Buy chips", top_up: "Top up",
+    buy_upto: "up to {n}", buy_max: "(max reached this hand)",
+    ph_say: "Say something to the table…  (they hear you and answer)", say: "Say",
+    your_move: "Your move.", you_have: "You have {hand}",
+    hand_over: "Hand over — deal the next one, or buy in.",
+    hand_no: "Hand #{n}", blinds: "blinds {sb}/{bb}",
+    between_hands: "between hands", in_play: "in play", mode_over: "game over",
+    thinking: "thinking…",
+    feed_hand: "— Hand #{n} · blinds {sb}/{bb} · dealer {dealer} —",
+    allin_reveal: "All-in — cards on their backs.",
+    shows: "shows", had: "had", folded_paren: " (folded)",
+    to_x: " (to {x})",
+    feed_buy: "buys in for {amount} (tab {debt}).",
+    feed_felted: "is felted — restaked {stake} (tab {debt}).",
+    sum_title: "Hand #{n} — result",
+    game_over_msg: "Game over — thanks for playing! Refresh to sit down again.",
+    note_offline: "Offline mode: opponents run on built-in instincts, no API calls.",
+    note_online: "Opponents powered by OpenAI model: {model} (auto-fallback if unavailable).",
+    tab_net: " · tab {debt} · net {net}",
+    heard: "heard",
+    help_title: "How to play",
+    help_1: "<b>Fold / Check / Call</b> — the middle button knows whether you can check for free or must call.",
+    help_2: "<b>Raise</b> — opens a slider; drag it or use the ½·¾·pot shortcuts, then Confirm.",
+    help_3: "<b>All-in</b> — shove your whole stack.",
+    help_4: "<b>Say</b> — talk to the table any time. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.",
+    help_5: "<b>Voice</b> — click 🎤 and speak: \"fold\", \"call\", \"raise to 200\", \"all in\" play the move; anything else is table talk. 🔊 lets the agents talk back out loud.",
+    help_6: "<b>Between hands</b> — buy more chips (added to your tab) or deal the next hand.",
+    help_note: "A player can bluff about their cards, but if they announce a move (\"I fold\", \"I'm all in\") the game forces the move to match.",
+    got_it: "Got it",
+  },
+  zh: {
+    page_title: "德州扑克 — 你 vs 机器",
+    title_sub: "无限注德州扑克",
+    tagline: "你，对阵一桌 AI 老牌友。",
+    lbl_name: "你的名字", lbl_lang: "Language / 语言", lbl_opponents: "对手数量",
+    lbl_stack: "起始筹码", lbl_sb: "小盲注", lbl_bb: "大盲注",
+    lbl_model: "模型",
+    chk_offline: "离线模式（内置机器人，不调用 API）",
+    chk_peek: "偷看模式（每手结束后亮出所有底牌）",
+    lbl_seed: "随机种子（可选，可复现的牌序）", ph_seed: "随机",
+    deal_in: "发牌，我上桌",
+    shuffling: "洗牌中…",
+    access_prompt: "这张牌桌需要访问码才能入座：",
+    access_required: "需要访问码才能开始游戏。",
+    start_failed: "游戏启动失败。",
+    leave: "离席", feed_head: "牌桌动态",
+    fold: "弃牌", check: "过牌", raise: "加注", allin: "全下",
+    call_n: "跟注 {n}", call_allin: "跟注 {n}（全下）",
+    half_pot: "半池", threeq_pot: "¾池", one_pot: "一池", min: "最小", max: "最大",
+    raise_to: "加注到", confirm: "确定",
+    next_hand: "下一手 ▸", buy_chips: "买筹码", top_up: "补充",
+    buy_upto: "最多 {n}", buy_max: "（本手已达上限）",
+    ph_say: "对牌桌说点什么……（他们听得见，也会回话）", say: "说",
+    your_move: "该你了。", you_have: "你现在是{hand}",
+    hand_over: "这手结束了——发下一手，或买些筹码。",
+    hand_no: "第 {n} 手", blinds: "盲注 {sb}/{bb}",
+    between_hands: "两手之间", in_play: "进行中", mode_over: "游戏结束",
+    thinking: "思考中…",
+    feed_hand: "— 第 {n} 手 · 盲注 {sb}/{bb} · 庄家 {dealer} —",
+    allin_reveal: "全下——底牌亮出来了。",
+    shows: "亮出", had: "拿的是", folded_paren: "（已弃牌）",
+    to_x: "（对 {x}）",
+    feed_buy: "买入 {amount}（记账 {debt}）。",
+    feed_felted: "输光了——庄家再借 {stake}（记账 {debt}）。",
+    sum_title: "第 {n} 手 · 结果",
+    game_over_msg: "游戏结束——多谢参与！刷新页面可以再来一局。",
+    note_offline: "离线模式：对手使用内置逻辑，不调用 API。",
+    note_online: "对手由 OpenAI 模型驱动：{model}（不可用时自动降级）。",
+    tab_net: " · 记账 {debt} · 净值 {net}",
+    heard: "听到",
+    help_title: "怎么玩",
+    help_1: "<b>弃牌 / 过牌 / 跟注</b> —— 中间的按钮会自动判断你能免费过牌还是必须跟注。",
+    help_2: "<b>加注</b> —— 打开滑块；拖动它或用 半池·¾池·一池 快捷键，然后点确定。",
+    help_3: "<b>全下</b> —— 推入你的全部筹码。",
+    help_4: "<b>说话</b> —— 随时和牌桌聊天。点名谁，谁就会回答；问他们<i>为什么</i>那么打，他们会解释真实的思路。",
+    help_5: "<b>语音</b> —— 点 🎤 开口说：“弃牌”“跟注”“加注到 200”“全下”会直接出牌；说别的就是牌桌聊天。开着 🔊，对手们会开口回话。",
+    help_6: "<b>两手之间</b> —— 买更多筹码（记在账上）或发下一手。",
+    help_note: "玩家可以在牌上虚张声势，但只要嘴上宣布了动作（“我弃了”“我全下”），游戏会强制动作和话一致。",
+    got_it: "明白",
+  },
+};
+
+function t(key, vars) {
+  const table = I18N[G.lang] || I18N.en;
+  let s = table[key] !== undefined ? table[key] : I18N.en[key];
+  if (s === undefined) return key;
+  if (vars) for (const k in vars) s = s.split("{" + k + "}").join(vars[k]);
+  return s;
+}
+
+/* --- translators for the engine's fixed English phrases (display only) --- */
+
+const STREETS_ZH = { PREFLOP: "翻牌前", FLOP: "翻牌", TURN: "转牌", RIVER: "河牌" };
+function trStreet(s) {
+  if (G.lang !== "zh" || !s) return s;
+  return STREETS_ZH[String(s).toUpperCase()] || s;
+}
+
+const VAL_WORD = { two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7",
+                   eight: "8", nine: "9", ten: "10", jack: "J", queen: "Q",
+                   king: "K", ace: "A" };
+function valChar(w) {
+  w = String(w).toLowerCase();
+  if (VAL_WORD[w]) return VAL_WORD[w];
+  const base = w.replace(/es$/, "").replace(/s$/, "");
+  return VAL_WORD[base] || w;
+}
+
+function trHand(name) {
+  if (G.lang !== "zh" || !name) return name;
+  let m;
+  if (/royal flush/i.test(name)) return "皇家同花顺";
+  if ((m = name.match(/^a Straight Flush, (\w+) high$/i))) return "同花顺（" + valChar(m[1]) + "高）";
+  if ((m = name.match(/^Four of a Kind, (\w+)$/i))) return "四条" + valChar(m[1]);
+  if ((m = name.match(/^a Full House, (\w+) over (\w+)$/i))) return "葫芦（" + valChar(m[1]) + "带" + valChar(m[2]) + "）";
+  if ((m = name.match(/^a Flush, (\w+) high$/i))) return "同花（" + valChar(m[1]) + "高）";
+  if ((m = name.match(/^a Straight, (\w+) high$/i))) return "顺子（" + valChar(m[1]) + "高）";
+  if ((m = name.match(/^Three of a Kind, (\w+)$/i))) return "三条" + valChar(m[1]);
+  if ((m = name.match(/^Two Pair, (\w+) and (\w+)$/i))) return "两对（" + valChar(m[1]) + "和" + valChar(m[2]) + "）";
+  if ((m = name.match(/^a Pair of (\w+)$/i))) return "一对" + valChar(m[1]);
+  if ((m = name.match(/^High Card, (\w+)$/i))) return "高牌" + valChar(m[1]);
+  return name;
+}
+
+function trActionDesc(desc) {
+  if (G.lang !== "zh") return desc;
+  let m;
+  if (desc === "folds") return "弃牌";
+  if (desc === "checks") return "过牌";
+  if ((m = desc.match(/^calls (\d+) \(all-in\)$/))) return "跟注 " + m[1] + "（全下）";
+  if ((m = desc.match(/^calls (\d+) and is all-in$/))) return "跟注 " + m[1] + "，全下";
+  if ((m = desc.match(/^calls (\d+)$/))) return "跟注 " + m[1];
+  if ((m = desc.match(/^bets (\d+)$/))) return "下注 " + m[1];
+  if ((m = desc.match(/^raises to (\d+)$/))) return "加注到 " + m[1];
+  if ((m = desc.match(/^goes ALL-IN for (\d+)$/))) return "全下 " + m[1];
+  if ((m = desc.match(/^posts small blind (\d+)( \(all-in\))?$/))) return "下小盲 " + m[1] + (m[2] ? "（全下）" : "");
+  if ((m = desc.match(/^posts big blind (\d+)( \(all-in\))?$/))) return "下大盲 " + m[1] + (m[2] ? "（全下）" : "");
+  return desc;
+}
+
+function potWord(w) { return w === "side pot" ? "边池" : (w === "main pot" ? "主池" : "底池"); }
+
+function trPot(text) {
+  if (G.lang !== "zh" || !text) return text;
+  let m;
+  if ((m = text.match(/^(.+?) wins the pot of (\d+) — everyone else folded\.$/)))
+    return m[1] + " 赢下底池 " + m[2] + "——其他人都弃牌了。";
+  if ((m = text.match(/^(.+?) wins the (main pot|side pot|pot) of (\d+) with (.+)\.$/)))
+    return m[1] + " 以" + trHand(m[4]) + "赢下" + potWord(m[2]) + " " + m[3] + "。";
+  if ((m = text.match(/^(.+?) split the (main pot|side pot|pot) of (\d+) with (.+)\.$/)))
+    return m[1].split(" and ").join(" 和 ") + " 以" + trHand(m[4]) + "平分" + potWord(m[2]) + " " + m[3] + "。";
+  if ((m = text.match(/^(.+?) takes back (\d+) uncalled chips\.$/)))
+    return m[1] + " 收回无人跟注的 " + m[2] + "。";
+  return text;
+}
+
+const TITLES_ZH = { "standings": "当前排名", "final standings": "最终排名",
+                    "chip counts when you left": "离席时的筹码" };
+function trTitle(title) {
+  if (G.lang !== "zh") return title;
+  return TITLES_ZH[title] || title;
+}
+
+/* ------------------------- state ------------------------- */
 
 const G = {
   sid: null,
@@ -23,24 +208,40 @@ const G = {
   seatPos: {},        // name -> {x, y} in table % coords
   meta: {},
   summary: null,      // finished-hand recap, shown until the next deal
-  actions: {},        // name -> {t, k}: each seat's latest move this street
+  actions: {},        // name -> {key, n, k}: each seat's latest move this street
+  accessCode: null,   // remembered ACCESS_CODE, if the host requires one
+  lastAllowance: 0,   // last between-hands buy allowance (for re-render)
+  lang: localStorage.getItem("holdem_lang")
+        || ((navigator.language || "").toLowerCase().indexOf("zh") === 0 ? "zh" : "en"),
 };
 
 // turn an engine action phrase ("raises to 120", "calls 20 (all-in)") into a
-// short chip label + a kind used for its color.
+// structured chip: a label key + amount + a kind used for its color. The label
+// itself is rendered per-language at draw time (chipLabel).
 function actionLabel(desc) {
   const d = desc.toLowerCase();
   const num = (desc.match(/(\d+)/) || [])[1];
   const n = num ? " " + num : "";
-  if (d.includes("fold")) return { t: "Fold", k: "fold" };
-  if (d.includes("small blind")) return { t: "SB" + n, k: "post" };
-  if (d.includes("big blind")) return { t: "BB" + n, k: "post" };
-  if (d.includes("all-in") || d.includes("all in")) return { t: "All-in" + n, k: "allin" };
-  if (d.startsWith("checks")) return { t: "Check", k: "check" };
-  if (d.startsWith("calls")) return { t: "Call" + n, k: "call" };
-  if (d.startsWith("bets")) return { t: "Bet" + n, k: "bet" };
-  if (d.startsWith("raises")) return { t: "Raise" + n, k: "raise" };
-  return { t: desc, k: "other" };
+  if (d.includes("fold")) return { key: "fold", n: "", k: "fold" };
+  if (d.includes("small blind")) return { key: "sb", n, k: "post" };
+  if (d.includes("big blind")) return { key: "bb", n, k: "post" };
+  if (d.includes("all-in") || d.includes("all in")) return { key: "allin", n, k: "allin" };
+  if (d.startsWith("checks")) return { key: "check", n: "", k: "check" };
+  if (d.startsWith("calls")) return { key: "call", n, k: "call" };
+  if (d.startsWith("bets")) return { key: "bet", n, k: "bet" };
+  if (d.startsWith("raises")) return { key: "raise", n, k: "raise" };
+  return { key: "other", n: "", k: "other", raw: desc };
+}
+
+const CHIP_LABELS = {
+  fold: ["Fold", "弃牌"], sb: ["SB", "小盲"], bb: ["BB", "大盲"],
+  allin: ["All-in", "全下"], check: ["Check", "过牌"], call: ["Call", "跟注"],
+  bet: ["Bet", "下注"], raise: ["Raise", "加注"],
+};
+function chipLabel(a) {
+  if (a.key === "other") return a.raw || "";
+  const pair = CHIP_LABELS[a.key];
+  return (G.lang === "zh" ? pair[1] : pair[0]) + (a.n || "");
 }
 
 function resetSummary() {
@@ -48,6 +249,26 @@ function resetSummary() {
   const el = $("summary");
   if (el) { el.classList.add("hidden"); el.innerHTML = ""; }
 }
+
+/* ------------------------- language switching ------------------------- */
+
+function applyLang() {
+  localStorage.setItem("holdem_lang", G.lang);
+  document.documentElement.lang = G.lang === "zh" ? "zh-CN" : "en";
+  document.title = t("page_title");
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.innerHTML = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-ph]").forEach((el) => { el.placeholder = t(el.dataset.i18nPh); });
+  const sel = $("opt-lang");
+  if (sel) sel.value = G.lang;
+  $("btn-lang").textContent = G.lang === "zh" ? "EN" : "中文";
+  // redraw everything language-dependent that's currently on screen
+  if (G.state) render();
+  if (G.mode === "action") showActionControls();
+  else if (G.mode === "between") showBetweenControls(G.lastAllowance);
+}
+
+$("opt-lang").addEventListener("change", () => { G.lang = $("opt-lang").value; applyLang(); });
+$("btn-lang").addEventListener("click", () => { G.lang = G.lang === "zh" ? "en" : "zh"; applyLang(); });
 
 /* ------------------------- setup ------------------------- */
 
@@ -67,20 +288,19 @@ function startGame() {
     offline: $("opt-offline").checked,
     show_cards: $("opt-showcards").checked,
     seed: $("opt-seed").value === "" ? null : clampInt($("opt-seed").value, 0, 1e12, null),
+    language: G.lang,          // what the agents speak
   };
   if (G.accessCode) options.access_code = G.accessCode;
-  $("setup-note").textContent = API
-    ? "Dealing you in… (a sleeping free server can take ~30s to wake the first time)"
-    : "Shuffling…";
-  fetch(API + "/api/new", {
+  $("setup-note").textContent = t("shuffling");
+  fetch("/api/new", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(options),
   })
     .then((r) => {
       if (r.status === 403) {          // host set an access code — ask and retry
-        const code = prompt("This table needs an access code to sit down:");
+        const code = prompt(t("access_prompt"));
         if (code) { G.accessCode = code; startGame(); }
-        else $("setup-note").textContent = "An access code is required to play.";
+        else $("setup-note").textContent = t("access_required");
         return null;
       }
       return r.json();
@@ -88,7 +308,7 @@ function startGame() {
     .then((data) => {
       if (!data) return;               // 403 branch handled it
       if (!data.sid) {
-        $("setup-note").textContent = data.error || "Could not start the game.";
+        $("setup-note").textContent = data.error || t("start_failed");
         return;
       }
       G.sid = data.sid;
@@ -96,11 +316,7 @@ function startGame() {
       $("game").classList.remove("hidden");
       connect();
     })
-    .catch(() => {
-      $("setup-note").textContent = API
-        ? "Couldn't reach the game server — it may be waking up. Try again in a moment."
-        : "Could not start the game.";
-    });
+    .catch(() => { $("setup-note").textContent = t("start_failed"); });
 }
 
 function clampInt(v, lo, hi, dflt) {
@@ -112,7 +328,7 @@ function clampInt(v, lo, hi, dflt) {
 /* ------------------------- SSE stream ------------------------- */
 
 function connect() {
-  G.es = new EventSource(API + "/api/events?sid=" + G.sid);
+  G.es = new EventSource("/api/events?sid=" + G.sid);
   G.es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch (_) { return; }
@@ -121,29 +337,33 @@ function connect() {
   G.es.onerror = () => { /* EventSource auto-reconnects; server re-syncs. */ };
 }
 
+function heroName() { return G.state ? G.state.hero_name : null; }
+
 function handle(ev) {
   if (ev.state) G.state = ev.state;
 
   switch (ev.type) {
     case "start":
       G.meta = ev.meta || {};
-      if (G.meta.note) feed(G.meta.note, "sys");
+      if (G.lang === "zh")
+        feed(G.meta.offline ? t("note_offline") : t("note_online", { model: G.meta.model }), "sys");
+      else if (G.meta.note) feed(G.meta.note, "sys");
       break;
     case "hand_start":
       clearBubbles(); hideAward();
       resetSummary();
       G.actions = {};
       G.thinking = null;
-      feed(`— Hand #${ev.hand_no} · blinds ${ev.sb}/${ev.bb} · dealer ${ev.dealer} —`, "sys");
+      feed(t("feed_hand", { n: ev.hand_no, sb: ev.sb, bb: ev.bb, dealer: esc(ev.dealer) }), "sys");
       break;
     case "street":
       G.actions = {};   // fresh street — clear last-move chips
-      feed(`${ev.street}`, "sys");
+      feed(trStreet(ev.street), "sys");
       break;
     case "action":
       G.thinking = null;
       G.actions[ev.name] = actionLabel(ev.desc);
-      feed(`<span class="who">${esc(ev.name)}</span> ${esc(ev.desc)}.`);
+      feed(`<span class="who">${esc(ev.name)}</span> ${esc(trActionDesc(ev.desc))}${G.lang === "zh" ? "。" : "."}`);
       break;
     case "thinking":
       G.thinking = ev.name;
@@ -151,29 +371,33 @@ function handle(ev) {
     case "chat":
       if (ev.name === G.thinking) G.thinking = null;  // their reply arrived
       showBubble(ev.name, ev.text, ev.to);
-      feed(`<span class="who">${esc(ev.name)}</span>${ev.to ? ` (to ${esc(ev.to)})` : ""}: "${esc(ev.text)}"`, "chat");
+      feed(`<span class="who">${esc(ev.name)}</span>${ev.to ? esc(t("to_x", { x: ev.to })) : ""}: "${esc(ev.text)}"`, "chat");
+      if (typeof speak === "function" && ev.name !== heroName()) speak(ev.name, ev.text);
       break;
     case "reveal":
-      feed("All-in — cards on their backs.", "sys");
+      feed(t("allin_reveal"), "sys");
       break;
     case "showdown":
       (ev.players || []).forEach((p) =>
-        feed(`<span class="who">${esc(p.name)}</span> shows ${cardsText(p.cards)} — ${esc(p.hand)}`));
+        feed(`<span class="who">${esc(p.name)}</span> ${t("shows")} ${cardsText(p.cards)} — ${esc(trHand(p.hand))}`));
       break;
     case "peek":
       (ev.players || []).forEach((p) =>
-        feed(`<span class="who">${esc(p.name)}</span> had ${cardsText(p.cards)}${p.folded ? " (folded)" : ""}${p.hand ? " — " + esc(p.hand) : ""}`, "sys"));
+        feed(`<span class="who">${esc(p.name)}</span> ${t("had")} ${cardsText(p.cards)}${p.folded ? t("folded_paren") : ""}${p.hand ? " — " + esc(trHand(p.hand)) : ""}`, "sys"));
       break;
     case "pot_award":
-      feed(ev.text, "pot");
-      recordAward(ev.text);
+      feed(esc(trPot(ev.text)), "pot");
+      recordAward(ev.text);   // parse the raw English shape; display is translated
       break;
     case "buy":
-      feed(`<span class="who">${esc(ev.name)}</span> buys in for ${ev.amount} (tab ${ev.debt}).`, "sys");
+      feed(`<span class="who">${esc(ev.name)}</span> ${t("feed_buy", { amount: ev.amount, debt: ev.debt })}`, "sys");
       break;
     case "rebuy":
-      feed(`<span class="who">${esc(ev.name)}</span> is felted — restaked ${ev.stake} (tab ${ev.debt}).`, "sys");
-      if (ev.line) showBubble(ev.name, ev.line, null);
+      feed(`<span class="who">${esc(ev.name)}</span> ${t("feed_felted", { stake: ev.stake, debt: ev.debt })}`, "sys");
+      if (ev.line) {
+        showBubble(ev.name, ev.line, null);
+        if (typeof speak === "function") speak(ev.name, ev.line);
+      }
       break;
     case "standings":
       renderStandings(ev);
@@ -182,7 +406,7 @@ function handle(ev) {
       onAwait(ev);
       break;
     case "log":
-      if (ev.text) feed(ev.text, ev.level === "warn" || ev.level === "error" ? "warn" : "sys");
+      if (ev.text) feed(esc(ev.text), ev.level === "warn" || ev.level === "error" ? "warn" : "sys");
       break;
     case "game_over":
       onGameOver();
@@ -190,7 +414,7 @@ function handle(ev) {
     case "fatal":
       $("setup").classList.remove("hidden");
       $("game").classList.add("hidden");
-      $("setup-note").textContent = ev.text || "Game error.";
+      $("setup-note").textContent = ev.text || t("start_failed");
       break;
     case "sync": case "ping": case "closed": break;
   }
@@ -209,7 +433,7 @@ function onAwait(ev) {
     showBetweenControls(ev.allowance || 0);
   } else {
     // generic text prompt (e.g. a confirm) — feed it and let the say box answer raw
-    feed(ev.prompt || "…", "sys");
+    feed(esc(ev.prompt || "…"), "sys");
     setControls("text");
   }
 }
@@ -233,17 +457,17 @@ function showActionControls() {
 
   const callBtn = $("act-call");
   if (toCall <= 0) {
-    callBtn.textContent = "Check";
+    callBtn.textContent = t("check");
   } else if (toCall >= heroStack) {
-    callBtn.textContent = `Call ${heroStack} (all-in)`;
+    callBtn.textContent = t("call_allin", { n: heroStack });
   } else {
-    callBtn.textContent = `Call ${toCall}`;
+    callBtn.textContent = t("call_n", { n: toCall });
   }
 
   $("act-raise").classList.toggle("hidden", !L.can_raise);
   $("raise-panel").classList.add("hidden");
 
-  const hint = L.hero_hand_hint ? `You have ${L.hero_hand_hint}` : "Your move.";
+  const hint = L.hero_hand_hint ? t("you_have", { hand: trHand(L.hero_hand_hint) }) : t("your_move");
   $("hero-hint").textContent = hint;
 }
 
@@ -296,7 +520,7 @@ function act(line) {
 }
 
 function postInput(line) {
-  fetch(API + "/api/input?sid=" + G.sid, {
+  fetch("/api/input?sid=" + G.sid, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ line }),
   }).catch(() => {});
@@ -305,12 +529,13 @@ function postInput(line) {
 /* between hands */
 function showBetweenControls(allowance) {
   setControls("between");
+  G.lastAllowance = allowance;
   const buy = $("buy-amount");
   buy.max = allowance; buy.value = 0;
   buy.disabled = allowance <= 0;
   $("buy-go").disabled = allowance <= 0;
-  $("buy-allow").textContent = allowance > 0 ? `up to ${allowance}` : "(max reached this hand)";
-  $("hero-hint").textContent = "Hand over — deal the next one, or buy in.";
+  $("buy-allow").textContent = allowance > 0 ? t("buy_upto", { n: allowance }) : t("buy_max");
+  $("hero-hint").textContent = t("hand_over");
 }
 
 $("next-hand").addEventListener("click", () => {
@@ -327,24 +552,24 @@ $("buy-go").addEventListener("click", () => {
 $("say-go").addEventListener("click", sendSay);
 $("say-input").addEventListener("keydown", (e) => { if (e.key === "Enter") sendSay(); });
 function sendSay() {
-  const t = $("say-input").value.trim();
-  if (!t) return;
+  const txt = $("say-input").value.trim();
+  if (!txt) return;
   $("say-input").value = "";
-  postInput(G.mode === "text" ? t : "say " + t);
+  postInput(G.mode === "text" ? txt : "say " + txt);
   if (G.mode === "text") G.mode = null;
 }
 
 function leaveTable() {
   if (!G.sid) return;
-  fetch(API + "/api/quit?sid=" + G.sid, { method: "POST" }).catch(() => {});
+  fetch("/api/quit?sid=" + G.sid, { method: "POST" }).catch(() => {});
 }
 
 function onGameOver() {
   if (G.es) { G.es.close(); G.es = null; }
   setControls("none");
   $("hero-hint").textContent = "";
-  $("mode-label").textContent = "game over";
-  showAward("Game over — thanks for playing! Refresh to sit down again.");
+  $("mode-label").textContent = t("mode_over");
+  showAward(t("game_over_msg"));
 }
 
 /* ------------------------- rendering ------------------------- */
@@ -354,17 +579,17 @@ function render() {
   if (!s) return;
 
   // top bar
-  $("hand-label").textContent = s.hand_no ? `Hand #${s.hand_no}` : "—";
-  $("blinds-label").textContent = `blinds ${s.sb}/${s.bb}`;
+  $("hand-label").textContent = s.hand_no ? t("hand_no", { n: s.hand_no }) : "—";
+  $("blinds-label").textContent = t("blinds", { sb: s.sb, bb: s.bb });
   const ml = $("mode-label");
-  if (s.live) { ml.textContent = s.street || "in play"; ml.classList.add("live"); }
-  else { ml.textContent = "between hands"; ml.classList.remove("live"); }
+  if (s.live) { ml.textContent = trStreet(s.street) || t("in_play"); ml.classList.add("live"); }
+  else { ml.textContent = t("between_hands"); ml.classList.remove("live"); }
 
   // pot + street tag + board
   const pot = $("pot");
   if (s.live && s.pot > 0) { pot.classList.remove("hidden"); $("pot-amt").textContent = s.pot; }
   else pot.classList.add("hidden");
-  $("street-tag").textContent = s.live ? (s.street || "") : "";
+  $("street-tag").textContent = s.live ? (trStreet(s.street) || "") : "";
   renderBoard(s.board || []);
 
   // seats
@@ -428,19 +653,19 @@ function seatEl(seat, x, y) {
   // seat's latest move this street (falling back to its folded/all-in state).
   let status = "";
   if (seat.name === G.thinking && G.state.live) {
-    status = `<span class="badge think">thinking…</span>`;
+    status = `<span class="badge think">${t("thinking")}</span>`;
   } else {
-    let act = G.actions[seat.name];
-    if (!act) {
-      if (seat.folded) act = { t: "Fold", k: "fold" };
-      else if (seat.all_in) act = { t: "All-in", k: "allin" };
+    let a = G.actions[seat.name];
+    if (!a) {
+      if (seat.folded) a = { key: "fold", n: "", k: "fold" };
+      else if (seat.all_in) a = { key: "allin", n: "", k: "allin" };
     }
-    if (act) status = `<span class="act-chip k-${act.k}">${esc(act.t)}</span>`;
+    if (a) status = `<span class="act-chip k-${a.k}">${esc(chipLabel(a))}</span>`;
   }
   body.innerHTML =
     `<div class="seat-name">${esc(seat.name)}</div>` +
     `<div class="seat-stack">$${seat.stack}</div>` +
-    (seat.debt ? `<div class="seat-debt">tab ${seat.debt}</div>` : "") +
+    (seat.debt ? `<div class="seat-debt">${G.lang === "zh" ? "记账 " + seat.debt : "tab " + seat.debt}</div>` : "") +
     `<div class="seat-badges">${status}</div>`;
 
   el.appendChild(cardsRow);
@@ -517,9 +742,10 @@ function hideAward() { $("award").classList.add("hidden"); }
 
 /* ---- finished-hand summary (stays on the felt until the next deal) ---- */
 
-// The pot-award lines are worded by the engine; pull the winner(s) + amount
-// out so we can glow the seats and stack a "+chips" badge on them. If a line
-// doesn't parse we still show its text — nothing is lost.
+// The pot-award lines are worded by the engine (always in English — display is
+// translated separately); pull the winner(s) + amount out so we can glow the
+// seats and stack a "+chips" badge on them. If a line doesn't parse we still
+// show its text — nothing is lost.
 function parseAward(text) {
   let m;
   if ((m = text.match(/^(.+?) takes back (\d+)/)))
@@ -553,8 +779,8 @@ function renderSummary() {
   }
   el.classList.remove("hidden");
   el.innerHTML =
-    `<div class="sum-title">Hand #${G.summary.handNo} — result</div>` +
-    G.summary.lines.map((l) => `<div class="sum-line">🏆 ${esc(l)}</div>`).join("");
+    `<div class="sum-title">${t("sum_title", { n: G.summary.handNo })}</div>` +
+    G.summary.lines.map((l) => `<div class="sum-line">🏆 ${esc(trPot(l))}</div>`).join("");
 }
 
 // a few gold chips sliding from the pot toward each winner
@@ -594,10 +820,10 @@ function feed(html, cls) {
 function renderStandings(ev) {
   let rows = ev.rows.map((r) => {
     const net = r.net >= 0 ? "+" + r.net : "" + r.net;
-    const tab = r.debt ? ` · tab ${r.debt} · net ${net}` : "";
-    return `${r.is_human ? "★ " : ""}${esc(r.name)} — $${r.stack}${tab}`;
+    const tab = r.debt ? t("tab_net", { debt: r.debt, net: net }) : "";
+    return `${r.is_human ? "★ " : ""}${esc(r.name)} — $${r.stack}${esc(tab)}`;
   });
-  feed(`<b>${esc(ev.title)}:</b><br>` + rows.join("<br>"), "sys");
+  feed(`<b>${esc(trTitle(ev.title))}:</b><br>` + rows.join("<br>"), "sys");
 }
 
 /* ------------------------- helpers ------------------------- */
@@ -610,3 +836,6 @@ function esc(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
+
+/* apply the saved/browser language on load */
+applyLang();

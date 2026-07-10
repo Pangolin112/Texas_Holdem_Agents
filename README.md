@@ -47,6 +47,7 @@ Options:
 | `--offline` | no API — opponents use built-in bot logic |
 | `--seed N` | reproducible shuffles |
 | `--show-cards` | peek mode: reveal every opponent's hole cards after each hand |
+| `--lang zh` | the agents speak Chinese — table talk, reactions, explanations (default `en`) |
 
 ## Play — web (2D table)
 
@@ -70,6 +71,23 @@ Under the hood the real `holdem` engine runs in a background thread; each game
 event is streamed to the browser over Server-Sent Events, and your clicks are
 sent back as the very same commands the terminal accepts (`f`, `c`, `r 120`,
 `a`, `say …`, `buy 200`). No poker logic is duplicated in JavaScript.
+
+**Language — English / 中文.** Pick the table language on the setup screen (or
+toggle 中文/EN in the top bar; it's remembered). The whole UI switches, the
+engine's action/pot/hand-name lines are shown translated, and — set at game
+start — the **agents themselves speak the chosen language**: their table talk,
+reactions, and "why did you do that" explanations come back in Chinese or
+English. (The engine still runs in English internally; the terminal version
+has the same agent-language switch via `--lang zh`.)
+
+**Voice.** Click the **🎤** button and just say your move — *"fold"*, *"call"*,
+*"raise to 200"*, *"all in"*, or in Chinese *“弃牌”“跟注”“加注到200”“全下”* —
+and it plays; anything else you say is sent as table talk, exactly like the Say
+box (*"next hand"* / *“下一手”* deals between hands, *"buy 200"* / *“买200”*
+tops up). With **🔊** on, the agents talk back out loud in the table language.
+Both use the browser's built-in Web Speech API — no extra API keys, no cost;
+speech input needs Chrome/Edge over HTTPS or localhost (the button hides
+itself where unsupported).
 
 ## Play — online (share a link)
 
