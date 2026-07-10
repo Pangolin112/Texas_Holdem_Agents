@@ -25,6 +25,10 @@ const Voice = {
   listening: false,
 };
 
+// Playback speed for the agents' voices (browsers pitch-correct, so faster
+// stays natural). Applies to both the OpenAI audio and the fallback voice.
+const SPEECH_RATE = 1.3;
+
 function voiceLang() { return G.lang === "zh" ? "zh-CN" : "en-US"; }
 
 /* ------------------------- output: agents talk ------------------------- */
@@ -56,6 +60,8 @@ function pumpSpeech() {
     .then((blob) => {
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);
+      audio.defaultPlaybackRate = SPEECH_RATE;
+      audio.playbackRate = SPEECH_RATE;
       audio.onended = audio.onerror = () => { URL.revokeObjectURL(url); done(); };
       return audio.play().catch(() => { URL.revokeObjectURL(url); done(); });
     })
@@ -72,7 +78,7 @@ function speakFallback(text, done) {
   const v = voices.find((x) => x.lang === want)
         || voices.find((x) => x.lang && x.lang.indexOf(want.slice(0, 2)) === 0);
   if (v) u.voice = v;
-  u.rate = 1.05;
+  u.rate = SPEECH_RATE;
   u.onend = u.onerror = done;
   speechSynthesis.speak(u);
 }
