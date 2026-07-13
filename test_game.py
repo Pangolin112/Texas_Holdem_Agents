@@ -4,10 +4,11 @@ import random
 
 from holdem import evaluator, ui
 from holdem.brains import (PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain,
-                           spoken_action)
+                           PolicyBrain, spoken_action, _softmax)
 from holdem.cards import Card, Deck, RANK_VALUES
 from holdem.game import TexasHoldemGame, looks_like_move_question
-from holdem.players import Action, LLMPlayer, Player, ALL_IN, CALL, CHECK, FOLD, RAISE
+from holdem.players import (Action, LLMPlayer, Player,
+                            ALL_IN, CALL, CHECK, FOLD, RAISE)
 
 ui.QUIET = True
 
@@ -580,6 +581,124 @@ def test_fuzz_full_games():
     ok(True, "30 seeded multi-hand games: chips always equal buy-ins plus house loans")
 
 
+# --------------------------------------------------- softmax policy brain
+
+def _seat(stack=1000, hole="As Ks"):
+    p = Player("Hero", stack)
+    p.hole = cards(hole)
+    return p
+
+
+def _pview(to_call=0, pot=100, can_raise=True, min_to=40, max_to=1000, board="", bb=20):
+    return {
+        "to_call": to_call, "pot": pot, "can_raise": can_raise,
+        "min_raise_to": min_to, "max_raise_to": max_to,
+        "board": cards(board) if board else [], "blinds": (bb // 2, bb),
+    }
+
+
+def _by_name(name):
+    return next(p for p in PERSONALITIES if p["name"] == name)
+
+
+def test_softmax_distribution():
+    probs = _softmax([1.0, 0.0, -1.0], 1.0)
+    ok(abs(sum(probs) - 1.0) < 1e-9, "softmax sums to 1")
+    ok(probs[0] > probs[1] > probs[2], "softmax is monotone in score")
+    hot = _softmax([2.0, 0.0], 2.0)
+    cold = _softmax([2.0, 0.0], 0.2)
+    ok(cold[0] > hot[0], "lower temperature concentrates weight on the top action")
+    big = _softmax([1000.0, 1001.0], 1.0)
+    ok(abs(sum(big) - 1.0) < 1e-9 and big[1] > big[0],
+       "softmax stays numerically stable for large scores")
+
+
+def test_policybrain_is_abstract():
+    try:
+        PolicyBrain(PERSONALITIES[0], random.Random(0))
+        ok(False, "PolicyBrain should not be directly instantiable")
+    except TypeError:
+        ok(True, "PolicyBrain is abstract — construction is blocked")
+    ok(PolicyBrain.__abstractmethods__ == frozenset({"_strength", "_action_utilities"}),
+       "PolicyBrain declares _strength and _action_utilities abstract")
+
+    class Half(PolicyBrain):  # implements only one extension point
+        def _strength(self, hole, board):
+            return 0.5
+    try:
+        Half(PERSONALITIES[0], random.Random(0))
+        ok(False, "a subclass missing _action_utilities should stay abstract")
+    except TypeError:
+        ok(True, "a half-implemented subclass is still abstract")
+    ok(not HeuristicBrain.__abstractmethods__,
+       "HeuristicBrain implements both extension points — it is concrete")
+
+
+def test_heuristic_actions_always_legal():
+    rng = random.Random(12345)
+    for _ in range(3000):
+        brain = HeuristicBrain(rng.choice(PERSONALITIES), random.Random(rng.random()))
+        stack = rng.randint(40, 2000)
+        to_call = rng.choice([0, rng.randint(1, 20), rng.randint(20, stack)])
+        room = stack > to_call                       # is there space above the call to raise into?
+        can_raise = room and rng.random() < 0.85
+        max_to = to_call + (rng.randint(1, stack - to_call) if room else 0)
+        min_to = min(to_call + 20, max_to) if room else 0
+        view = _pview(to_call=to_call, pot=rng.randint(1, 500), can_raise=can_raise,
+                      min_to=min_to, max_to=max_to)
+        seat = _seat(stack=stack)
+        act, _ = brain.decide(seat, view)
+        assert act.kind in (FOLD, CHECK, CALL, RAISE, ALL_IN), "illegal action kind %r" % act.kind
+        assert not (to_call == 0 and act.kind == FOLD), "folded when checking was free"
+        assert not (not can_raise and act.kind == RAISE), "raised when raising was illegal"
+        if act.kind == RAISE:
+            assert min_to <= act.amount <= max_to, ("raise %d outside window [%d, %d]"
+                                                    % (act.amount, min_to, max_to))
+    ok(True, "3000 random spots: HeuristicBrain always returns a legal, in-range action")
+
+
+def _fold_count(brain, view, n=2000):
+    folds = 0
+    for i in range(n):
+        brain.rng = random.Random(i)
+        if brain.decide(_seat(), view)[0].kind == FOLD:
+            folds += 1
+    return folds
+
+
+def test_dominated_action_pruned():
+    shove = _pview(to_call=800, pot=200, can_raise=False, min_to=1000, max_to=1000)
+    brain = HeuristicBrain(_by_name("Mike"), random.Random(0))  # loosest, stickiest seat
+
+    brain._strength = lambda hole, board: 0.98  # the nuts
+    ok(_fold_count(brain, shove) == 0,
+       "never folds the nuts to a shove (dominated fold is pruned)")
+
+    brain._strength = lambda hole, board: 0.30  # junk
+    ok(_fold_count(brain, shove) > 1000,
+       "usually folds junk facing a shove-sized bet")
+
+
+def test_personality_differentiates():
+    spot = _pview(to_call=100, pot=200, can_raise=True, min_to=200, max_to=1000)
+
+    def raise_rate(name):
+        brain = HeuristicBrain(_by_name(name), random.Random(0))
+        brain._strength = lambda hole, board: 0.5  # same marginal hand for everyone
+        hits = 0
+        for i in range(2000):
+            brain.rng = random.Random(i)
+            if brain.decide(_seat(), spot)[0].kind in (RAISE, ALL_IN):
+                hits += 1
+        return hits
+
+    mike = raise_rate("Mike")    # aggression 0.85, looseness 0.70
+    sarah = raise_rate("Sarah")  # aggression 0.45, looseness 0.25
+    emma = raise_rate("Emma")    # aggression 0.25 — a passive calling station
+    ok(mike > sarah > emma,
+       "on an identical hand, raise frequency tracks aggression: Mike > Sarah > Emma")
+
+
 if __name__ == "__main__":
     test_evaluator()
     test_fold_around()
@@ -609,4 +728,9 @@ if __name__ == "__main__":
     test_needle_stays_banter_not_a_lecture()
     test_model_chain_and_fallback()
     test_fuzz_full_games()
+    test_softmax_distribution()
+    test_policybrain_is_abstract()
+    test_heuristic_actions_always_legal()
+    test_dominated_action_pruned()
+    test_personality_differentiates()
     print("all good: %d checks passed" % CHECKS["passed"])
