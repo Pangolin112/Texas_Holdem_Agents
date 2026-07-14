@@ -37,8 +37,9 @@
         <input id="opt-bb" type="number" min="2" value="20">
       </label>
       <label><span data-i18n="lbl_model">Model</span>
-        <input id="opt-model" type="text" value="gpt-5.2" placeholder="gpt-5.2">
+        <input id="opt-model" type="text" list="model-suggestions" autocomplete="off">
       </label>
+      <datalist id="model-suggestions"></datalist>
     </div>
 
     <div class="check-row">

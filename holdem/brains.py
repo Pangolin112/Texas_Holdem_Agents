@@ -7,13 +7,33 @@ anyone else's hole cards. If the API call fails, HeuristicBrain takes over so
 the game keeps moving.
 """
 
+from __future__ import annotations
+
 import json
+import math
+import random
 import re
+from abc import ABC, abstractmethod
+from typing import Any, Optional
 
 from . import ui
-from .cards import Card  # noqa: F401
+from .cards import Card
 from . import evaluator
-from .players import Action, FOLD, CHECK, CALL, RAISE, ALL_IN
+from .players import (Action, ActionKind, Brain, Player, PlayerView,
+                      FOLD, CHECK, CALL, RAISE, ALL_IN)
+
+
+def _softmax(scores: list[float], temp: float) -> list[float]:
+    """Boltzmann distribution over action utilities. `temp` is the player's
+    unpredictability: low temp -> near-deterministic (almost always the top
+    action), high temp -> loose and mixed. Returns probabilities aligned with
+    `scores`. Kept in pure Python — this is a handful of actions on the hot
+    decision path; vectorise (numpy) only if/when the weights become learned."""
+    t = max(temp, 0.05)
+    m = max(scores)
+    exps = [math.exp((s - m) / t) for s in scores]
+    total = sum(exps)
+    return [e / total for e in exps]
 
 
 class ModelChain:
@@ -38,6 +58,21 @@ class ModelChain:
             self.idx += 1
             return True
         return False
+
+
+# DeepSeek's OpenAI-compatible endpoint only serves deepseek-* models, so a table
+# pointed at it must fall back *within* that family — never to a gpt-* id that the
+# endpoint doesn't have.
+DEEPSEEK_FALLBACKS = ["deepseek-chat", "deepseek-reasoner"]
+
+
+def build_model_chain(chosen, base_url=None, openai_fallbacks=None):
+    """Preferred model first, then provider-matched fallbacks. DeepSeek is
+    detected from the endpoint or the model id, so a downgrade never jumps to a
+    model the current endpoint can't serve."""
+    on_deepseek = (base_url and "deepseek" in base_url) or chosen.startswith("deepseek")
+    fallbacks = DEEPSEEK_FALLBACKS if on_deepseek else (openai_fallbacks or [])
+    return ModelChain([chosen] + list(fallbacks))
 
 
 def _is_model_error(exc):
@@ -177,107 +212,130 @@ def _lang_note(lang):
 
 
 # ---------------------------------------------------------------------------
-# Heuristic fallback brain (also powers --offline mode)
+# Policy brains: an abstract scored-action base, and the heuristic seat that
+# implements it (also powers --offline mode and the LLM fallback).
 # ---------------------------------------------------------------------------
 
-class HeuristicBrain:
-    is_llm = False
+class PolicyBrain(Brain, ABC):
+    """Shared machinery for a seat that plays by a scored-action policy.
 
-    def __init__(self, personality, rng, lang="en"):
+    It decides by scoring each legal action, dropping the ones that are clearly
+    dominated, and sampling the rest from a Boltzmann distribution whose
+    temperature is the seat's unpredictability — then sizing any raise. It also
+    carries the table presence (taunts, chat, reactions, buy-ins) common to these
+    characters. Subclasses supply the two things that actually differ between
+    characters:
+
+        _strength(hole, board)          -> how good the hand looks, in [0, 1]
+        _action_utilities(player, view, strength) -> how the personality weighs
+                                                     each legal move
+
+    Everything else — sampling, dominated-move pruning, bet sizing, table talk —
+    is inherited, so a future learned-weights seat overrides `_action_utilities`
+    (and maybe `_strength`) and nothing else."""
+
+    is_llm: bool = False
+
+    # An action this much worse (in utility) than the best available is treated
+    # as a no-brainer to skip, not a rare mixed line. Tune with `_action_utilities`.
+    DOMINATED_BAND: float = 0.85
+
+    def __init__(self, personality: dict[str, Any], rng: random.Random,
+                 lang: str = "en") -> None:
         self.p = personality
         self.rng = rng
         self.lang = lang
+        self._last_choice: list[tuple[ActionKind, float]] = []
 
-    def _taunts(self):
+    # -- extension points (subclasses MUST implement) -----------------------
+
+    @abstractmethod
+    def _strength(self, hole: list[Card], board: list[Card]) -> float:
+        """How strong the hand looks right now, in [0, 1]."""
+        ...
+
+    @abstractmethod
+    def _action_utilities(self, player: Player, view: PlayerView,
+                          strength: float) -> list[tuple[ActionKind, float]]:
+        """Return a list of (action_kind, utility) over the *legal* actions.
+        This is where personality lives — as weights on hand strength, pot odds
+        and bluff appetite, not as scattered thresholds. `decide` turns the
+        utilities into a Boltzmann distribution and samples one."""
+        ...
+
+    # -- table talk ---------------------------------------------------------
+
+    def _taunts(self) -> list[str]:
         if self.lang == "zh" and self.p.get("taunts_zh"):
             return self.p["taunts_zh"]
         return self.p["taunts"]
 
-    # -- strength estimation ------------------------------------------------
-
-    def _preflop_strength(self, hole):
-        a, b = sorted((c.value for c in hole), reverse=True)
-        if a == b:
-            return 0.50 + (a - 2) / 24.0  # 22 ≈ 0.50 ... AA = 1.0
-        s = (a + b) / 27.0 * 0.42
-        if hole[0].suit == hole[1].suit:
-            s += 0.07
-        gap = a - b
-        if gap == 1:
-            s += 0.06
-        elif gap == 2:
-            s += 0.03
-        if a >= 11 and b >= 11:
-            s += 0.12
-        elif a == 14:
-            s += 0.05
-        return min(s, 0.95)
-
-    def _strength(self, hole, board):
-        if not board:
-            return self._preflop_strength(hole)
-        rank, _ = evaluator.best_hand(hole + board)
-        base = {0: 0.15, 1: 0.38, 2: 0.55, 3: 0.66, 4: 0.76,
-                5: 0.82, 6: 0.91, 7: 0.97, 8: 0.99}[rank[0]]
-        # Don't get excited about a made hand that is entirely on the board.
-        if len(board) == 5:
-            board_rank, _ = evaluator.best_hand(board)
-            if board_rank >= rank:
-                base = 0.25
-        return max(0.05, min(0.99, base + (self.rng.random() - 0.5) * 0.12))
-
     # -- decision -----------------------------------------------------------
 
-    def decide(self, player, view):
-        strength = self._strength(player.hole, view["board"])
-        to_call = view["to_call"]
-        pot = max(view["pot"], 1)
-        aggr = self.p["aggression"]
+    # How unpredictable this seat is: the softmax temperature. Low -> the player
+    # almost always takes the highest-utility line; high -> loose and mixed.
+    # Looser, more aggressive personalities mix more. An explicit
+    # `unpredictability` on the personality overrides the derived default —
+    # that's the seam for adding it as a first-class character axis later.
+    def _temperature(self) -> float:
+        if "unpredictability" in self.p:
+            return self.p["unpredictability"]
         loose = self.p["looseness"]
+        aggr = self.p["aggression"]
+        return 0.30 + loose * 0.30 + (aggr - 0.5) * 0.12
+
+    def decide(self, player: Player, view: PlayerView) -> tuple[Action, Optional[str]]:
+        strength = self._strength(player.hole, view["board"])
         rng = self.rng
         say = rng.choice(self._taunts()) if rng.random() < 0.18 else None
 
-        min_to = view["min_raise_to"]
-        max_to = view["max_raise_to"]
-        can_raise = view["can_raise"]
-        bb = view["blinds"][1]
+        # 1. score legal actions  2. soften into a distribution  3. sample.
+        utils = self._action_utilities(player, view, strength)
+        # A person won't take a line that's clearly far worse than their best
+        # option; without this the softmax tail leaks probability onto dominated
+        # actions (e.g. folding the nuts to a shove). Drop the no-brainer-bad ones.
+        best = max(u for _, u in utils)
+        utils = [(k, u) for k, u in utils if u >= best - self.DOMINATED_BAND]
+        kinds = [k for k, _ in utils]
+        probs = _softmax([u for _, u in utils], self._temperature())
+        # Kept for explain_move / debugging: what the seat weighed this time.
+        self._last_choice = list(zip(kinds, probs))
 
-        # Short stack: shove or fold, but only with a real hand.
-        if player.stack <= 6 * bb and strength > 0.62 - (loose - 0.5) * 0.1:
+        r = rng.random()
+        cum = 0.0
+        kind = kinds[-1]
+        for k, prob in zip(kinds, probs):
+            cum += prob
+            if r <= cum:
+                kind = k
+                break
+
+        if kind == FOLD:
+            return Action(FOLD), None  # fold quietly, no trash talk
+        if kind == CHECK:
+            return Action(CHECK), say
+        if kind == CALL:
+            return Action(CALL), say
+        if kind == ALL_IN:
             return Action(ALL_IN), say
 
+        # RAISE: sizing is unchanged from before — a pot-proportional target,
+        # clamped to the legal window.
+        pot = max(view["pot"], 1)
+        to_call = view["to_call"]
+        min_to = view["min_raise_to"]
+        max_to = view["max_raise_to"]
+        bb = view["blinds"][1]
         if to_call == 0:
-            urge = strength + (aggr - 0.5) * 0.25
-            if can_raise and (urge > 0.62 or rng.random() < aggr * 0.12):
-                target = int(pot * (0.5 + rng.random() * 0.7))
-                target = max(min_to, min(max(target, bb), max_to))
-                if strength > 0.92 and rng.random() < aggr * 0.25:
-                    return Action(ALL_IN), say
-                return Action(RAISE, target), say
-            return Action(CHECK), say
-
-        pot_odds = to_call / float(pot + to_call)
-        eff = strength + (loose - 0.5) * 0.22
-        # Facing a shove-sized bet, only a genuinely strong hand continues.
-        if to_call >= max(player.stack // 2, 5 * bb) and eff < 0.71:
-            return Action(FOLD), None
-        if eff > pot_odds + 0.28 and can_raise and rng.random() < aggr:
-            if strength > 0.92 and rng.random() < aggr * 0.35:
-                return Action(ALL_IN), say
+            target = int(pot * (0.5 + rng.random() * 0.7))
+            target = max(min_to, min(max(target, bb), max_to))
+        else:
             target = int((pot + to_call) * (0.8 + rng.random() * 0.7))
             target = max(min_to, min(target, max_to))
-            return Action(RAISE, target), say
-        # Don't give up too easily: call a little past strict pot odds, more so
-        # for looser players, since folding at the first bet just bleeds chips.
-        slack = 0.04 + loose * 0.05
-        if eff >= pot_odds - slack:
-            return Action(CALL), say
-        # Cheap bets get peeled — nobody likes folding for one more small call.
-        if to_call <= 2 * bb and rng.random() < 0.25 + loose * 0.35:
-            return Action(CALL), say
-        return Action(FOLD), None
+        return Action(RAISE, target), say
 
-    def buy_decision(self, player, cap, starting_stack, table=None):
+    def buy_decision(self, player: Player, cap: int, starting_stack: int,
+                     table: Optional[dict] = None) -> int:
         """Voluntary top-up before the next hand. Returns chips to buy (0 =
         stand pat), never more than `cap`. Only a short stack gets reloaded,
         and looser/bolder players reload sooner and closer to a full stack.
@@ -294,7 +352,9 @@ class HeuristicBrain:
         want = starting_stack - stack  # reload back toward a full stack
         return max(0, min(want, cap))
 
-    def chat_reply(self, player, situation, chat, speaker_name, text, addressed=None):
+    def chat_reply(self, player: Player, situation: str, chat: list[tuple[str, str]],
+                   speaker_name: str, text: str,
+                   addressed: Optional[str] = None) -> Optional[str]:
         # Spoken to directly -> almost always answer; general remark -> often;
         # overhearing someone else's exchange -> rarely butt in.
         chance = 0.95 if addressed == "you" else (0.2 if addressed else 0.6)
@@ -302,12 +362,14 @@ class HeuristicBrain:
             return self.rng.choice(self._taunts())
         return None
 
-    def react(self, player, situation, chat, event):
+    def react(self, player: Player, situation: str, chat: list[tuple[str, str]],
+              event: str) -> Optional[str]:
         if self.rng.random() < 0.7:
             return self.rng.choice(self._taunts())
         return None
 
-    def explain_move(self, player, situation, chat, questioner, question):
+    def explain_move(self, player: Player, situation: str, chat: list[tuple[str, str]],
+                     questioner: str, question: str) -> str:
         # No live reasoning model offline, but still give a grounded, coherent
         # answer rather than a throwaway line.
         if self.lang == "zh":
@@ -328,6 +390,85 @@ class HeuristicBrain:
                    "how you'd been betting. ")
                 + ("I play %s and %s, so given my position and the stacks it was the line I "
                    "was comfortable with — not a random punt." % (style, loose)))
+
+
+class HeuristicBrain(PolicyBrain):
+    """The default offline seat. Its whole character is two hand-tuned scalars,
+    `aggression` and `looseness`, that weight how it reads its hand and how it
+    scores each action — no learning, no API. The strongest available offline
+    play, and the fallback whenever an LLM seat's API call fails."""
+
+    # -- strength estimation ------------------------------------------------
+
+    def _preflop_strength(self, hole: list[Card]) -> float:
+        a, b = sorted((c.value for c in hole), reverse=True)
+        if a == b:
+            return 0.50 + (a - 2) / 24.0  # 22 ≈ 0.50 ... AA = 1.0
+        s = (a + b) / 27.0 * 0.42
+        if hole[0].suit == hole[1].suit:
+            s += 0.07
+        gap = a - b
+        if gap == 1:
+            s += 0.06
+        elif gap == 2:
+            s += 0.03
+        if a >= 11 and b >= 11:
+            s += 0.12
+        elif a == 14:
+            s += 0.05
+        return min(s, 0.95)
+
+    def _strength(self, hole: list[Card], board: list[Card]) -> float:
+        if not board:
+            return self._preflop_strength(hole)
+        rank, _ = evaluator.best_hand(hole + board)
+        base = {0: 0.15, 1: 0.38, 2: 0.55, 3: 0.66, 4: 0.76,
+                5: 0.82, 6: 0.91, 7: 0.97, 8: 0.99}[rank[0]]
+        # Don't get excited about a made hand that is entirely on the board.
+        if len(board) == 5:
+            board_rank, _ = evaluator.best_hand(board)
+            if board_rank >= rank:
+                base = 0.25
+        return max(0.05, min(0.99, base + (self.rng.random() - 0.5) * 0.12))
+
+    # -- action scoring -----------------------------------------------------
+
+    def _action_utilities(self, player: Player, view: PlayerView,
+                          strength: float) -> list[tuple[ActionKind, float]]:
+        to_call = view["to_call"]
+        pot = max(view["pot"], 1)
+        aggr = self.p["aggression"]
+        loose = self.p["looseness"]
+        can_raise = view["can_raise"]
+        bb = view["blinds"][1]
+
+        # Looser players talk themselves into more hands, so they perceive more
+        # strength than is really there.
+        eff = strength + (loose - 0.5) * 0.22
+        # A short stack pushes with anything half-decent, folds the rest.
+        short_push = 2.5 * (strength - 0.5) if player.stack <= 6 * bb else 0.0
+        # Aggression + looseness together are the bluff/steal appetite.
+        bluff = aggr * loose
+
+        utils: list[tuple[ActionKind, float]] = []
+        if to_call == 0:
+            utils.append((CHECK, 0.5))
+            if can_raise:
+                utils.append((RAISE,
+                              2.0 * (strength - 0.5) + 1.3 * (aggr - 0.5)
+                              + 0.63 * bluff))
+            utils.append((ALL_IN, 3.0 * (strength - 0.9) + short_push))
+        else:
+            pot_odds = to_call / float(pot + to_call)
+            margin = eff - pot_odds  # >0 means the price is right
+            utils.append((FOLD, 0.6 * (pot_odds - eff) * (1.6 - loose) - 0.15))
+            utils.append((CALL, 1.4 * margin + 0.35 * loose + 0.15))
+            if can_raise:
+                utils.append((RAISE,
+                              2.2 * (strength - 0.55) + 1.3 * (aggr - 0.5)
+                              + 0.9 * bluff))
+            utils.append((ALL_IN, 3.0 * (strength - 0.85) + short_push))
+        return utils
 
 
 # ---------------------------------------------------------------------------
@@ -573,10 +714,12 @@ def reconcile_action(action, say, view, raise_to=None):
     return Action(want), say
 
 
-class LLMBrain:
-    is_llm = True
+class LLMBrain(Brain):
+    is_llm: bool = True
 
-    def __init__(self, client, model, personality, rng, lang="en"):
+    def __init__(self, client: Any, model: "str | ModelChain",
+                 personality: dict[str, Any], rng: random.Random,
+                 lang: str = "en") -> None:
         self.client = client
         # `model` may be a plain id (tests, simple calls) or a shared ModelChain.
         self.chain = model if isinstance(model, ModelChain) else ModelChain([model])
@@ -586,10 +729,10 @@ class LLMBrain:
         self._warned = False
 
     @property
-    def model(self):
+    def model(self) -> str:
         return self.chain.current
 
-    def decide(self, player, view):
+    def decide(self, player: Player, view: PlayerView) -> tuple[Action, Optional[str]]:
         ui.thinking(player.name)
         try:
             raw = self._ask(player, view)
@@ -601,7 +744,8 @@ class LLMBrain:
                 self._warned = True
             return self.fallback.decide(player, view)
 
-    def buy_decision(self, player, cap, starting_stack, table=None):
+    def buy_decision(self, player: Player, cap: int, starting_stack: int,
+                     table: Optional[dict] = None) -> int:
         """Let the agent genuinely decide, via the model, how many chips to buy
         before the next hand (0 to skip, at most `cap`). Only a seat below a
         full buy-in bothers to weigh it — a comfortably stacked one stands pat
@@ -643,11 +787,14 @@ class LLMBrain:
     def _one_call(self, model, messages, json_mode, effort, plain=False):
         kwargs = {"model": model, "messages": messages}
         if not plain:
-            if json_mode:
+            # deepseek-reasoner (like the OpenAI o-series) rejects response_format,
+            # temperature and other sampling params — send the bare request.
+            ds_reasoner = model.startswith("deepseek-reasoner")
+            if json_mode and not ds_reasoner:
                 kwargs["response_format"] = {"type": "json_object"}
             if model.startswith(("gpt-5", "o1", "o3", "o4")):
                 kwargs["reasoning_effort"] = effort
-            else:
+            elif not ds_reasoner:
                 kwargs["temperature"] = 1.0
         resp = self.client.chat.completions.create(**kwargs)
         return resp.choices[0].message.content or ""
@@ -700,7 +847,9 @@ class LLMBrain:
             return None
         return line[:140]
 
-    def chat_reply(self, player, situation, chat, speaker_name, text, addressed=None):
+    def chat_reply(self, player: Player, situation: str, chat: list[tuple[str, str]],
+                   speaker_name: str, text: str,
+                   addressed: Optional[str] = None) -> Optional[str]:
         try:
             if addressed == "you":
                 said = ('%s just spoke to YOU: "%s" — answer them.'
@@ -719,7 +868,8 @@ class LLMBrain:
             return self.fallback.chat_reply(player, situation, chat,
                                             speaker_name, text, addressed)
 
-    def react(self, player, situation, chat, event):
+    def react(self, player: Player, situation: str, chat: list[tuple[str, str]],
+              event: str) -> Optional[str]:
         try:
             return self._one_liner(player,
                                    "%s\n\nRecent table talk:\n%s\n\nWhat just happened: %s\n"
@@ -729,7 +879,8 @@ class LLMBrain:
         except Exception:
             return self.fallback.react(player, situation, chat, event)
 
-    def explain_move(self, player, situation, chat, questioner, question):
+    def explain_move(self, player: Player, situation: str, chat: list[tuple[str, str]],
+                     questioner: str, question: str) -> Optional[str]:
         """The player questioned this seat's play — give the real reasoning,
         step by step, not a one-liner. Kept at "low" reasoning effort: the
         prompt already asks for the genuine step-by-step logic, and low effort

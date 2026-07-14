@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from holdem import ui
-from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain
+from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, build_model_chain
 from holdem.cards import RED_SUITS, SUIT_SYMBOLS, VALUE_CHARS, VALUE_LABELS
 from holdem.game import TexasHoldemGame
 from holdem.players import HumanPlayer, LLMPlayer
@@ -41,6 +41,8 @@ from holdem import evaluator
 # Same model defaults as the terminal entry point.
 DEFAULT_MODEL = "gpt-5.2"
 FALLBACK_MODELS = ["gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-4o-mini"]
+OPENAI_MODEL_SUGGESTIONS = list(FALLBACK_MODELS)
+DEEPSEEK_MODEL_SUGGESTIONS = ["deepseek-v4-pro", "deepseek-chat", "deepseek-reasoner"]
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(HERE, "static")
@@ -65,6 +67,21 @@ def load_dotenv():
             key, value = key.strip(), value.strip().strip("'\"")
             if key and key not in os.environ:
                 os.environ[key] = value
+
+
+def server_config():
+    """Defaults the setup screen should show (from .env / host env)."""
+    chosen = os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    on_deepseek = bool(base_url and "deepseek" in base_url) or chosen.startswith("deepseek")
+    provider = "DeepSeek" if on_deepseek else "OpenAI"
+    return {
+        "model": chosen,
+        "provider": provider,
+        "has_api_key": bool(os.environ.get("OPENAI_API_KEY")),
+        "model_suggestions": (DEEPSEEK_MODEL_SUGGESTIONS if on_deepseek
+                              else OPENAI_MODEL_SUGGESTIONS),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -337,7 +354,10 @@ def build_game(options):
     offline = bool(options.get("offline"))
     chosen = (options.get("model") or os.environ.get("OPENAI_MODEL")
               or DEFAULT_MODEL)
-    model_chain = ModelChain([chosen] + FALLBACK_MODELS)
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    on_deepseek = bool(base_url and "deepseek" in base_url) or chosen.startswith("deepseek")
+    provider = "DeepSeek" if on_deepseek else "OpenAI"
+    model_chain = build_model_chain(chosen, base_url, FALLBACK_MODELS)
 
     client = None
     note = None
@@ -350,7 +370,7 @@ def build_game(options):
     else:
         from openai import OpenAI
         client = OpenAI(timeout=45.0, max_retries=2)
-        note = "Opponents powered by OpenAI model: %s (auto-fallback if unavailable)." % chosen
+        note = "Opponents powered by %s model: %s (auto-fallback if unavailable)." % (provider, chosen)
 
     name = (options.get("name") or "You").strip()[:14] or "You"
     stack = int(options.get("stack") or 1000)
@@ -376,16 +396,20 @@ def build_game(options):
         "note": note,
         "offline": offline,
         "model": None if offline else chosen,
+        "provider": provider,
         "seed": seed,
         "show_cards": reveal_all,
         "language": lang,
         # natural agent voices need the API; the browser falls back to its own
-        # speech synthesis when this is False.
-        "tts": client is not None,
+        # speech synthesis when this is False. DeepSeek's endpoint has no TTS,
+        # so voices fall back there too.
+        "tts": client is not None and not on_deepseek,
         "roster": [p.name for p in players[1:]],
         "hero": name,
     }
-    return game, meta, client
+    # The web layer only reuses the returned client for TTS, which DeepSeek
+    # doesn't provide — hand back None there so voices degrade gracefully.
+    return game, meta, (client if not on_deepseek else None)
 
 
 def chat_worker(session, game, sink):
@@ -530,6 +554,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._serve_static("index.html")
         if path in ("/healthz", "/api/health"):
             return self._json({"ok": True, "games": len(SESSIONS)})
+        if path == "/api/config":
+            return self._json(server_config())
         if path == "/api/events":
             return self._events(query)
         if path.startswith("/static/"):

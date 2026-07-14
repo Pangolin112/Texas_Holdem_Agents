@@ -11,7 +11,7 @@ import random
 import sys
 
 from holdem import ui
-from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain
+from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, build_model_chain
 from holdem.game import TexasHoldemGame
 from holdem.players import HumanPlayer, LLMPlayer
 from holdem.ui import QuitGame
@@ -84,7 +84,10 @@ def main():
 
     client = None
     chosen = args.model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
-    model_chain = ModelChain([chosen] + FALLBACK_MODELS)
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    on_deepseek = bool(base_url and "deepseek" in base_url) or chosen.startswith("deepseek")
+    provider = "DeepSeek" if on_deepseek else "OpenAI"
+    model_chain = build_model_chain(chosen, base_url, FALLBACK_MODELS)
     if args.offline:
         print(ui.dim(" offline mode: opponents run on built-in instincts, no API calls.\n"))
     elif not os.environ.get("OPENAI_API_KEY"):
@@ -94,8 +97,8 @@ def main():
     else:
         from openai import OpenAI
         client = OpenAI(timeout=45.0, max_retries=2)
-        print(ui.dim(" opponents powered by OpenAI model: %s (auto-fallback if unavailable)\n"
-                     % chosen))
+        print(ui.dim(" opponents powered by %s model: %s (auto-fallback if unavailable)\n"
+                     % (provider, chosen)))
 
     try:
         name = ui.safe_input(" What's your name, champ? [You] ").strip() or "You"

@@ -50,7 +50,7 @@ const I18N = {
     sum_title: "Hand #{n} — result",
     game_over_msg: "Game over — thanks for playing! Refresh to sit down again.",
     note_offline: "Offline mode: opponents run on built-in instincts, no API calls.",
-    note_online: "Opponents powered by OpenAI model: {model} (auto-fallback if unavailable).",
+    note_online: "Opponents powered by {provider} model: {model} (auto-fallback if unavailable).",
     tab_net: " · tab {debt} · net {net}",
     heard: "heard",
     help_title: "How to play",
@@ -100,7 +100,7 @@ const I18N = {
     sum_title: "第 {n} 手 · 结果",
     game_over_msg: "游戏结束——多谢参与！刷新页面可以再来一局。",
     note_offline: "离线模式：对手使用内置逻辑，不调用 API。",
-    note_online: "对手由 OpenAI 模型驱动：{model}（不可用时自动降级）。",
+    note_online: "对手由 {provider} 模型驱动：{model}（不可用时自动降级）。",
     tab_net: " · 记账 {debt} · 净值 {net}",
     heard: "听到",
     help_title: "怎么玩",
@@ -345,9 +345,12 @@ function handle(ev) {
   switch (ev.type) {
     case "start":
       G.meta = ev.meta || {};
-      if (G.lang === "zh")
-        feed(G.meta.offline ? t("note_offline") : t("note_online", { model: G.meta.model }), "sys");
-      else if (G.meta.note) feed(G.meta.note, "sys");
+      if (G.meta.offline) feed(t("note_offline"), "sys");
+      else if (G.lang === "en" && G.meta.note) feed(G.meta.note, "sys");
+      else feed(t("note_online", {
+        provider: G.meta.provider || "OpenAI",
+        model: G.meta.model || "",
+      }), "sys");
       break;
     case "hand_start":
       clearBubbles(); hideAward();
@@ -846,5 +849,25 @@ function esc(s) {
 }
 function cssEsc(s) { return String(s).replace(/["\\]/g, "\\$&"); }
 
+function loadConfig() {
+  return fetch("/api/config")
+    .then((r) => r.json())
+    .then((cfg) => {
+      G.config = cfg;
+      const inp = $("opt-model");
+      if (inp && cfg.model) {
+        inp.value = cfg.model;
+        inp.placeholder = cfg.model;
+      }
+      const dl = $("model-suggestions");
+      if (dl && cfg.model_suggestions) {
+        dl.innerHTML = cfg.model_suggestions
+          .map((m) => `<option value="${esc(m)}">`)
+          .join("");
+      }
+    })
+    .catch(() => {});
+}
+
 /* apply the saved/browser language on load */
-applyLang();
+loadConfig().then(applyLang);
