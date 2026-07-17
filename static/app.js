@@ -99,6 +99,8 @@ const I18N = {
     coach_bluff: "bluffing {p}",
     bucket_strong: "strong", bucket_medium: "medium", bucket_draw: "draws",
     bucket_weak: "weak", bucket_air: "air",
+    danger_0: "all clear", danger_1: "looking good", danger_2: "close spot",
+    danger_3: "danger", danger_4: "serious danger",
     follow_ai: "Follow the coach",
     auto_coach: "Follow the coach this street",
     auto_on_auto_advisor: "armed — doing whatever the coach says this street (click again to cancel)",
@@ -197,6 +199,8 @@ const I18N = {
     coach_bluff: "诈唬 {p}",
     bucket_strong: "成牌", bucket_medium: "中等", bucket_draw: "听牌",
     bucket_weak: "很弱", bucket_air: "空气",
+    danger_0: "安全", danger_1: "占优", danger_2: "胶着",
+    danger_3: "危险", danger_4: "高危",
     follow_ai: "遵循 AI",
     auto_coach: "本轮跟随 AI",
     auto_on_auto_advisor: "已预约：本轮听教练的（再点一次取消）",
@@ -785,6 +789,9 @@ function render() {
   if (s.live && s.pot > 0) { pot.classList.remove("hidden"); $("pot-amt").textContent = s.pot; }
   else pot.classList.add("hidden");
   $("street-tag").textContent = s.live ? (trStreet(s.street) || "") : "";
+  // The felt shifts hue with the street (see style.css) — a second, ambient
+  // way to feel where the hand is without reading the tag.
+  $("table").dataset.street = s.live && s.street ? s.street : "";
   renderBoard(s.board || []);
 
   // seats
@@ -924,10 +931,9 @@ function renderCoach() {
   const el = $("coach");
   const s = G.state;
   if (!s || !G.meta.coach || !heroSeat() || !heroSeat().card_count) {
-    el.classList.add("hidden");
+    el.className = "coach hidden";
     return;
   }
-  el.classList.remove("hidden");
 
   const v = $("coach-verdict");
   if (G.verdict) {
@@ -940,16 +946,27 @@ function renderCoach() {
   const thinking = G.thinking && G.thinking === G.meta.coach_name;
   const a = G.advice;
   const body = $("coach-body");
+  const chip = $("coach-danger");
   // Once the hand is over the verdict is the whole story — leaving the call it
   // made three streets ago on screen just reads as advice for a hand that no
   // longer exists. (A defiance line lands mid-hand, so it keeps the body.)
   const handOver = G.verdict && G.verdict.tone !== "defiance";
   if (!a || s.hero_folded || handOver) {
     body.classList.add("hidden");
+    chip.className = "coach-danger hidden";
+    el.className = "coach" + (thinking && !handOver && !s.hero_folded ? " analyzing" : "");
     $("coach-conf").textContent = thinking ? t("coach_thinking") : "";
     return;
   }
   body.classList.remove("hidden");
+  // The panel wears the spot's danger color, white -> green -> blue -> red ->
+  // purple. While the coach re-reads, the "analyzing" pulse sits on top; the
+  // moment the new advice lands (thinking clears with it) the pulse drops and
+  // the tint snaps — that flip IS the "analysis done" signal.
+  const d = (a.danger === undefined || a.danger === null) ? 2 : a.danger;
+  el.className = "coach d" + d + (thinking ? " analyzing" : "");
+  chip.className = "coach-danger";
+  chip.textContent = t("danger_" + d);
   $("coach-conf").textContent = thinking
     ? t("coach_thinking")
     : t("coach_sure", { p: pct(a.confidence) });

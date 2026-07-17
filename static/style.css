@@ -153,6 +153,13 @@ button { font-family: inherit; cursor: pointer; border: none; }
   border-radius: 48% / 46%; border: 2px solid rgba(255,255,255,.08);
 }
 
+/* the felt drifts hue with the street — preflop green, flop cooler, turn
+   warmer, river deepest — so where the hand is can be felt peripherally */
+#felt { transition: filter 1.2s ease; }
+#table[data-street="FLOP"]  #felt { filter: hue-rotate(-14deg) brightness(1.04); }
+#table[data-street="TURN"]  #felt { filter: hue-rotate(16deg) brightness(0.97); }
+#table[data-street="RIVER"] #felt { filter: hue-rotate(-34deg) brightness(0.93); }
+
 /* center pot + board */
 #center {
   position: absolute; left: 50%; top: 43%; transform: translate(-50%,-50%);
@@ -429,6 +436,29 @@ button { font-family: inherit; cursor: pointer; border: none; }
   flex: 0 0 auto; border-bottom: 1px solid var(--line);
   padding: 10px 12px 12px; background: linear-gradient(180deg, #1b1a26, var(--panel));
 }
+
+/* The spot's danger, worn as the panel's background: white -> green -> blue ->
+   red -> purple, each step more dangerous. The switch is deliberately instant —
+   the tint snapping in is the "analysis done" signal. */
+.coach.d0 { background: linear-gradient(180deg, #2b2e31, var(--panel)); box-shadow: inset 3px 0 0 #e9edf0; }
+.coach.d1 { background: linear-gradient(180deg, #163420, var(--panel)); box-shadow: inset 3px 0 0 #46c26a; }
+.coach.d2 { background: linear-gradient(180deg, #142a40, var(--panel)); box-shadow: inset 3px 0 0 #3aa0e0; }
+.coach.d3 { background: linear-gradient(180deg, #401713, var(--panel)); box-shadow: inset 3px 0 0 #e8523f; }
+.coach.d4 { background: linear-gradient(180deg, #331447, var(--panel)); box-shadow: inset 3px 0 0 #b455ff; }
+
+/* while it re-reads the table, a slow neutral pulse sits over the tint */
+.coach.analyzing { background: #201d2e; animation: coach-scan 1.1s ease-in-out infinite; }
+@keyframes coach-scan { 50% { background: #2b2740; } }
+
+.coach-danger {
+  font-size: 9.5px; font-weight: 800; padding: 1px 8px; border-radius: 8px;
+  letter-spacing: .5px; vertical-align: 1px;
+}
+.coach.d0 .coach-danger { background: #343a3f; color: #e9edf0; }
+.coach.d1 .coach-danger { background: #17331f; color: #6fdd8b; }
+.coach.d2 .coach-danger { background: #13324a; color: #6bc2f5; }
+.coach.d3 .coach-danger { background: #4a1f1a; color: #ff8f7e; }
+.coach.d4 .coach-danger { background: #3a1f52; color: #d9aaff; }
 .coach-head {
   display: flex; align-items: baseline; justify-content: space-between;
   color: #b39ddb; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;

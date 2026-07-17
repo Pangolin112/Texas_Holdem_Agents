@@ -307,6 +307,18 @@ you win 47% vs random · 38% vs their range · the price needs 30%   ->  CALL
 Call when it beats the price, fold when it doesn't, raise when you're far enough
 ahead to get paid.
 
+**The panel wears the spot's color.** White → green → blue → red → purple, each
+step more dangerous, computed from how far your equity against their ranges
+sits from the price (`danger_level` in `advisor.py`) — so a glance tells you
+whether this is a "take the free card" street or a "get out now" one. While the
+coach re-reads the table the panel pulses a neutral "analyzing" tone; the
+moment the new advice lands, the tint snaps in — that flip is the "analysis
+done" signal. When checking is free the scale caps at blue: a weak hand with
+nothing to pay is weak, not in danger, and a panel that cries wolf on every bad
+flop teaches you to ignore it. The terminal colors its coach banner on the same
+scale, and the felt itself drifts hue with the street (flop cooler, turn
+warmer, river deepest) so you can feel where the hand is peripherally.
+
 **One click to follow it.** The **Follow the coach** button says what it will
 do — *Follow the coach · Raise to 620* — so it's never a leap of faith. Or arm
 **本轮跟随 AI** to let it play the rest of the street for you. The engine ships

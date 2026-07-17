@@ -419,6 +419,17 @@ BUCKET_LABELS = {
     "weak": "weak", "air": "air",
 }
 
+# The spot's color, white -> green -> blue -> red -> purple, each step more
+# dangerous (advisor.danger_level). The terminal speaks ANSI, so cyan stands in
+# for blue and magenta for purple.
+DANGER_STYLE = {
+    0: (C.BOLD, "all clear"),
+    1: (C.GREEN, "looking good"),
+    2: (C.CYAN, "close spot"),
+    3: (C.RED, "danger"),
+    4: (C.MAGENTA, "serious danger"),
+}
+
 
 def advice(payload):
     """The coach's call on the spot in front of you: what the table looks like,
@@ -433,10 +444,13 @@ def advice(payload):
     if payload["action"] == "raise" and payload["amount"]:
         verb += " to %d" % payload["amount"]
     out()
-    out(bold(" ── the coach ──") + dim("   %.0f%% sure · %s"
-                                       % (payload["confidence"] * 100,
-                                          "read the model" if payload["source"] == "llm"
-                                          else "instinct")))
+    color, label = DANGER_STYLE.get(payload.get("danger", 2), DANGER_STYLE[2])
+    # bold() carries its own RESET, which would kill an enclosing color — so
+    # the banner and the label each get the color applied separately.
+    out(_c(color, bold(" ── the coach ── ")) + _c(color, label)
+        + dim("   %.0f%% sure · %s"
+              % (payload["confidence"] * 100,
+                 "read the model" if payload["source"] == "llm" else "instinct")))
     for read in payload["reads"]:
         note = read["note"] or READ_LABELS.get(read["key"], read["key"])
         bar = "█" * int(round(read["strength"] * 10))

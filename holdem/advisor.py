@@ -183,6 +183,36 @@ def pot_odds(to_call, pot):
     return to_call / float(pot + to_call)
 
 
+def danger_level(adjusted, price, threat, to_call):
+    """How scary this spot is, 0..4 — the color scale behind the coach panel
+    (white, green, blue, red, purple; each step more dangerous).
+
+    Danger describes the SPOT, not the recommendation: how far your equity
+    against their ranges sits from the price you're being asked to pay, with a
+    one-step bump when someone's range is genuinely monstrous. When checking is
+    free it caps at "close" — a weak hand with nothing to pay is weak, not in
+    danger, and a panel that cries wolf on every bad flop teaches the player to
+    ignore it.
+    """
+    if to_call <= 0:
+        if adjusted >= 0.65 and threat < 0.75:
+            return 0
+        if adjusted >= 0.50:
+            return 1
+        return 2
+    margin = adjusted - price
+    bump = 1 if threat >= 0.85 else 0
+    if margin >= 0.20 and not bump:
+        return 0
+    if margin >= 0.08:
+        return 1 + bump
+    if margin >= -0.05:
+        return 2 + bump
+    if margin >= -0.18:
+        return min(4, 3 + bump)
+    return 4
+
+
 def advice_command(advice):
     """The terminal command that carries out `advice` — the one place that
     mapping lives, so the web button, the autopilot and the terminal all follow
@@ -245,6 +275,7 @@ class HeuristicAdvisor:
         # and price are neck and neck is a coin flip and should say so.
         edge = abs(adjusted - price) if to_call > 0 else abs(adjusted - 0.5)
         confidence = max(0.15, min(0.95, 0.35 + 1.6 * edge))
+        threat = threat_level(reads)
         return {
             "action": action,
             "amount": amount,
@@ -253,7 +284,11 @@ class HeuristicAdvisor:
             "equity": round(equity, 4),
             "adjusted": round(adjusted, 4),
             "pot_odds": round(price, 4),
-            "threat": round(threat_level(reads), 3),
+            "threat": round(threat, 3),
+            # The spot's color, 0 (white, all clear) .. 4 (purple, get out).
+            # Derived from the numbers, so the LLM overruling the action in
+            # _merge doesn't change it — danger describes the spot, not the plan.
+            "danger": danger_level(adjusted, price, threat, to_call),
             "vs_range": exact,
             "to_call": to_call,
             "pot": pot,

@@ -1353,6 +1353,27 @@ def test_advice_carries_the_numbers_it_reasoned_from():
     ok(a["source"] == "instinct", "and it says where the advice came from")
 
 
+def test_danger_scale_tracks_the_spot():
+    dl = advisor.danger_level
+    ok(dl(0.75, 0.30, 0.5, 100) == 0, "far ahead of the price: all clear (white)")
+    ok(dl(0.45, 0.30, 0.5, 100) == 1, "clearly ahead: green")
+    ok(dl(0.31, 0.30, 0.5, 100) == 2, "a coin flip: blue")
+    ok(dl(0.20, 0.30, 0.5, 100) == 3, "behind the price: red")
+    ok(dl(0.05, 0.50, 0.9, 500) == 4, "badly beat by a monster: purple")
+
+    levels = [dl(e / 100.0, 0.30, 0.5, 100) for e in range(0, 101, 5)]
+    ok(all(a >= b for a, b in zip(levels, levels[1:])),
+       "more equity is never more dangerous")
+    ok(dl(0.60, 0.30, 0.9, 100) > dl(0.60, 0.30, 0.4, 100),
+       "a monstrous range raises the alarm a step on the same numbers")
+    ok(max(dl(e / 100.0, 0.0, th / 100.0, 0)
+           for e in range(0, 101, 10) for th in range(0, 101, 10)) <= 2,
+       "with nothing to call you are never in real danger — checking is free")
+
+    a = _fast_coach().advise(_aview(to_call=100, pot=100), _odds(0.2))
+    ok(a["danger"] in (0, 1, 2, 3, 4), "the advice carries the spot's color")
+
+
 def test_followed_advice_is_judged_on_intent():
     raise_200 = {"action": RAISE, "amount": 200}
     ok(advisor.followed_advice(raise_200, Action(RAISE, 200)), "exactly as told")
@@ -1689,6 +1710,7 @@ if __name__ == "__main__":
     test_advice_is_always_legal()
     test_advice_prices_real_hands_end_to_end()
     test_advice_carries_the_numbers_it_reasoned_from()
+    test_danger_scale_tracks_the_spot()
     test_followed_advice_is_judged_on_intent()
     test_verdict_tone_matrix()
     test_verdict_context_judges_only_what_the_table_showed()
