@@ -615,6 +615,16 @@ button { font-family: inherit; cursor: pointer; border: none; }
 }
 .rr-session { margin-top: 8px; color: var(--dim); font-size: 11px; }
 
+/* ---------------- the send-off ---------------- */
+.fw-text {
+  margin: 6px 0 16px; padding: 12px 16px;
+  border-left: 3px solid #b39ddb; border-radius: 10px;
+  background: rgba(0,0,0,.35); color: #d9c6ea;
+  font-size: 15px; line-height: 1.65;
+}
+.fw-stats { text-align: center; color: var(--dim); font-size: 13px; line-height: 1.9; }
+.fw-stats div:first-child { color: var(--gold); font-size: 15px; font-weight: 700; }
+
 @media (max-width: 900px) {
   .result { padding: 8px; }
   .res-row { min-width: 520px; }

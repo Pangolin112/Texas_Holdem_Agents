@@ -93,6 +93,9 @@ class Sink:
     def hand_review(self, review):
         pass
 
+    def farewell(self, payload):
+        pass
+
     def autopilot(self, player, mode):
         pass
 
@@ -541,6 +544,32 @@ def hand_review(review):
             % (s["hands"], s["followed"], s["decisions"],
                s["net_followed"], s["net_defied"],
                ("  ·  " + leaks) if leaks else "")))
+
+
+def farewell(payload):
+    """The send-off at the door: the night in numbers, and the coach's word."""
+    sink = get_sink()
+    if sink is not None:
+        sink.farewell(payload)
+        return
+    if not payload:
+        return
+    out()
+    out(_c(C.YELLOW, "═" * WIDTH))
+    out(bold(" ── the coach walks you out ──"))
+    s = payload.get("session") or {}
+    line = "   %d hands · net %+d" % (payload["hands"], payload["net"])
+    if s.get("decisions"):
+        line += " · followed %d/%d · %+d listening, %+d your own way" % (
+            s["followed"], s["decisions"], s["net_followed"], s["net_defied"])
+    out(dim(line))
+    leaks = " · ".join("%s ×%d" % (LEAK_LABELS.get(k, k), n)
+                       for k, n in (s.get("mistakes") or {}).items())
+    if leaks:
+        out(dim("   leaks on the ledger: " + leaks))
+    if payload.get("text"):
+        out(_c(C.MAGENTA, '   coach: "%s"' % payload["text"]))
+    out(_c(C.YELLOW, "═" * WIDTH))
 
 
 AUTOPILOT_LABELS = {

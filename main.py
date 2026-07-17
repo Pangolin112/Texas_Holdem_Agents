@@ -143,6 +143,7 @@ def main():
         game.run()
     except (QuitGame, KeyboardInterrupt):
         ui.show_standings(game.players, "chip counts when you left")
+    game.farewell()   # the coach's closing statement, whatever the exit path
     print("\n Thanks for playing!\n")
 
 

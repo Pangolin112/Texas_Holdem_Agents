@@ -113,6 +113,12 @@ const I18N = {
     leak_wild_raise: "wild raises", leak_missed_value: "missed value",
     rr_session: "{h} hands · followed {f}/{d} · net {nf} listening, {nd} your own way",
     rr_leaks: "leaks: {list}",
+    /* the send-off */
+    fw_title: "The coach walks you out",
+    fw_again: "Sit back down",
+    fw_hands: "{n} hands played", fw_net: "net {n}",
+    fw_follow: "followed the coach {f}/{d}",
+    fw_split: "{nf} listening · {nd} your own way",
     follow_ai: "Follow the coach",
     auto_coach: "Follow the coach this street",
     auto_on_auto_advisor: "armed — doing whatever the coach says this street (click again to cancel)",
@@ -225,6 +231,12 @@ const I18N = {
     leak_wild_raise: "乱加注", leak_missed_value: "漏价值",
     rr_session: "共 {h} 手 · 听劝 {f}/{d} · 听劝净 {nf} · 自己打净 {nd}",
     rr_leaks: "漏洞:{list}",
+    /* the send-off */
+    fw_title: "散场陈词",
+    fw_again: "再坐下来",
+    fw_hands: "共打了 {n} 手", fw_net: "净胜负 {n}",
+    fw_follow: "听劝 {f}/{d}",
+    fw_split: "听劝净 {nf} · 自己打净 {nd}",
     follow_ai: "遵循 AI",
     auto_coach: "本轮跟随 AI",
     auto_on_auto_advisor: "已预约：本轮听教练的（再点一次取消）",
@@ -605,7 +617,14 @@ function handle(ev) {
     case "log":
       if (ev.text) feed(esc(ev.text), ev.level === "warn" || ev.level === "error" ? "warn" : "sys");
       break;
+    case "farewell":
+      showFarewell(ev.farewell || {});
+      break;
     case "game_over":
+    case "closed":
+      // "closed" is the server retiring the session (the Leave button, or an
+      // old table being reaped) — ignoring it left the Leave button looking
+      // dead: the game ended server-side and the page never noticed.
       onGameOver();
       break;
     case "fatal":
@@ -613,7 +632,7 @@ function handle(ev) {
       $("game").classList.add("hidden");
       $("setup-note").textContent = ev.text || t("start_failed");
       break;
-    case "sync": case "ping": case "closed": break;
+    case "sync": case "ping": break;
   }
 
   render();
@@ -801,8 +820,33 @@ function onGameOver() {
   setControls("none");
   $("hero-hint").textContent = "";
   $("mode-label").textContent = t("mode_over");
-  showAward(t("game_over_msg"));
+  // The send-off overlay is the ceremony; the award banner is the fallback
+  // for games that end without one (no coach, or a reaped session).
+  if ($("farewell").classList.contains("hidden")) showAward(t("game_over_msg"));
 }
+
+/* ---- the send-off ---- */
+
+function showFarewell(f) {
+  hideResult();
+  $("fw-text").textContent = f.text ? "“" + f.text + "”" : "";
+  const s = f.session || {};
+  const rows = [t("fw_hands", { n: f.hands || 0 }) + " · " +
+                t("fw_net", { n: signed(f.net || 0) })];
+  if (s.decisions) {
+    rows.push(t("fw_follow", { f: s.followed, d: s.decisions }));
+    rows.push(t("fw_split", { nf: signed(s.net_followed || 0),
+                              nd: signed(s.net_defied || 0) }));
+    const leaks = Object.entries(s.mistakes || {})
+      .map(([k, n]) => t("leak_" + k) + "×" + n).join(" · ");
+    if (leaks) rows.push(t("rr_leaks", { list: leaks }));
+  }
+  $("fw-stats").innerHTML = rows.map((r) => `<div>${esc(r)}</div>`).join("");
+  $("farewell").classList.remove("hidden");
+  if (f.text && typeof speak === "function") speak(G.meta.coach_name || "Coach", f.text);
+}
+
+$("fw-again").addEventListener("click", () => location.reload());
 
 /* ------------------------- rendering ------------------------- */
 

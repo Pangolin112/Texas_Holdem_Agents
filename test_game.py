@@ -871,6 +871,7 @@ class RecordingSink(ui.Sink):
         self.lines = []
         self.verdicts = []
         self.reviews = []
+        self.farewells = []
 
     def hand_result(self, hand_no, rows, board):
         self.results.append({"hand_no": hand_no, "rows": rows, "board": board})
@@ -892,6 +893,9 @@ class RecordingSink(ui.Sink):
 
     def hand_review(self, review):
         self.reviews.append(review)
+
+    def farewell(self, payload):
+        self.farewells.append(payload)
 
 
 def result_game(reveal_all=False):
@@ -1478,6 +1482,66 @@ def test_review_text_names_the_habit_only_with_evidence():
     ok(llm.review(cheap), "a trivial hand never spends a model call")
 
 
+def test_farewell_sums_up_the_night():
+    game, hero, a, b = coach_game()
+    game.hand_no = 8
+    hero.stack, hero.debt = 1420, 200          # started at 1000: net +220
+    game.coach_session.update(hands=8, decisions=17, followed=11,
+                              net=220, net_followed=410, net_defied=-190,
+                              mistakes={advisor.GRADE_LOOSE_CALL: 4})
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        game.farewell()
+    finally:
+        ui.set_sink(None)
+    ok(len(sink.farewells) == 1, "leaving gets a send-off")
+    f = sink.farewells[0]
+    ok(f["hands"] == 8 and f["net"] == 220,
+       "the night's numbers: hands played, and net worth against the buy-in")
+    ok(f["session"]["mistakes"] == {advisor.GRADE_LOOSE_CALL: 4},
+       "the ledger comes with it")
+    ok(f["text"], "and the coach says goodbye")
+
+    # No coach: the numbers still show, nobody speaks.
+    game.advisor = None
+    ui.set_sink(sink)
+    try:
+        game.farewell()
+    finally:
+        ui.set_sink(None)
+    ok(sink.farewells[1]["text"] is None, "no coach, no speech — but still a send-off")
+
+
+def test_send_off_matches_the_night():
+    coach = advisor.HeuristicAdvisor(random.Random(1), lang="en")
+    quiet = {"hands": 0, "decisions": 0, "followed": 0, "net": 0,
+             "net_followed": 0, "net_defied": 0, "mistakes": {}}
+    def pay(hands, net, session=None):
+        return {"hands": hands, "net": net, "starting_stack": 1000,
+                "session": session or dict(quiet)}
+    ok("wisest" in coach.send_off(pay(0, 0)), "leaving without playing gets its own line")
+    ok("ran over" in coach.send_off(pay(9, 700)), "a big win is celebrated")
+    ok("ahead" in coach.send_off(pay(9, 80)), "a small win is a win")
+    ok("Flat" in coach.send_off(pay(9, 0)), "breaking even is named as such")
+    ok("cost you" in coach.send_off(pay(9, -120)), "a loss is owned")
+    ok("Rough night" in coach.send_off(pay(9, -700)), "a big loss gets the blunt one")
+
+    habit = dict(quiet, hands=9, decisions=15, followed=10,
+                 mistakes={advisor.GRADE_LOOSE_CALL: 4})
+    ok("call too much" in coach.send_off(pay(9, -120, habit)),
+       "the send-off names the same habit the debriefs kept booking")
+    zh = advisor.HeuristicAdvisor(random.Random(1), lang="zh")
+    ok("学费" in zh.send_off(pay(9, -120)), "...in the table's language")
+
+    llm = advisor.LLMAdvisor(client=object(), model="x", rng=random.Random(2),
+                             lang="en", range_budget=0.01)
+    llm._create = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+    ok(llm.send_off(pay(9, 80)), "a dead uplink still says goodbye")
+    llm._create = lambda *a, **k: (_ for _ in ()).throw(AssertionError("no call for 0 hands"))
+    ok(llm.send_off(pay(0, 0)), "zero hands never spends a model call")
+
+
 def test_danger_scale_tracks_the_spot():
     dl = advisor.danger_level
     ok(dl(0.75, 0.30, 0.5, 100) == 0, "far ahead of the price: all clear (white)")
@@ -1835,6 +1899,8 @@ if __name__ == "__main__":
     test_advice_is_always_legal()
     test_advice_prices_real_hands_end_to_end()
     test_advice_carries_the_numbers_it_reasoned_from()
+    test_farewell_sums_up_the_night()
+    test_send_off_matches_the_night()
     test_danger_scale_tracks_the_spot()
     test_decision_grades_judge_process_not_results()
     test_coach_review_debriefs_and_keeps_the_ledger()

@@ -374,6 +374,16 @@ Trivial hands — one advised decision, small pot — never spend a model call.
 In the browser the debrief sits inside the end-of-hand overlay, under the
 result table; in the terminal it prints after the hand result.
 
+**The send-off.** Leaving the table gets a closing ceremony. Click **Leave**
+(离席) in the browser — or `q` in the terminal — and the coach walks you out: a
+full-screen 散场陈词 with its closing statement (the night in one line, what
+you did well, the habit to fix), over the night's numbers — hands played, net,
+follow rate, net listening vs. going your own way, and your leaks by name. One
+button sits under it: *Sit back down*. With the API the statement is written
+for your actual night; offline it's picked by how the night went (big win,
+small win, flat, loss, rough) plus the habit line. A player who leaves without
+playing a hand gets told that was possibly the wisest line of the night.
+
 Offline (or the moment the API coughs) the coach is pure arithmetic with canned
 lines — the advice never just disappears. Turn it off with `--no-coach` or the
 setup checkbox. It needs the equity numbers, so `--no-odds` turns it off too.

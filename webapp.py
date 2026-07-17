@@ -332,6 +332,9 @@ class WebSink(ui.Sink):
     def hand_review(self, review):
         self.send("hand_review", review=review)
 
+    def farewell(self, payload):
+        self.send("farewell", farewell=payload)
+
     def autopilot(self, player, mode):
         self.send("autopilot", name=player.name, mode=mode)
 
@@ -686,6 +689,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/quit":
             session = self._session(query)
             if session is not None:
+                # The send-off goes into the stream BEFORE stop() enqueues
+                # "closed", so the browser shows the coach's last word and only
+                # then learns the table is gone. Computed here on the HTTP
+                # thread — the game thread may be blocked mid-decision, and
+                # leaving shouldn't wait on an opponent's think.
+                if session.alive and session.game is not None and session.sink is not None:
+                    ui.set_sink(session.sink)
+                    try:
+                        session.game.farewell()
+                    except Exception:
+                        pass  # a failed goodbye must never block the exit
+                    finally:
+                        ui.set_sink(None)
                 session.stop()
             return self._json({"ok": True})
         self.send_error(404)

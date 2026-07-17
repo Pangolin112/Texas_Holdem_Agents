@@ -427,6 +427,46 @@ class HeuristicAdvisor:
         en, zh = self.rng.choice(options)
         return zh if self.lang == "zh" else en
 
+    # -- the send-off ------------------------------------------------------
+
+    SEND_OFFS = {
+        "no_hands": ("Didn't even play a hand. Possibly the wisest line all night.",
+                     "一手没打就走——可能是今晚最明智的一手。"),
+        "big_win": ("You ran over this table tonight. Come back before they forget how.",
+                    "你今晚把这桌打穿了。趁他们还没缓过来,记得回来。"),
+        "win": ("You leave ahead. That's the whole job — don't let anyone complicate it.",
+                "带着盈利离场。这就是打牌的全部目标,别让任何人把它复杂化。"),
+        "even": ("Flat. Cheaper than most poker lessons, and you got the lessons anyway.",
+                 "不输不赢。比大多数学费便宜,课倒是一节没少上。"),
+        "loss": ("Tonight cost you. The ledger says why — and it isn't the cards.",
+                 "今晚交了学费。原因账本上写着,不在牌上。"),
+        "big_loss": ("Rough night. Read the ledger before you blame the deck.",
+                     "今晚很不顺。怪牌之前,先把账本看一遍。"),
+    }
+
+    def send_off(self, payload):
+        """The closing statement as the player stands up: the night in one
+        line, plus the habit — the same one the debriefs kept booking."""
+        hands = payload.get("hands") or 0
+        if hands <= 0:
+            key = "no_hands"
+        else:
+            frac = payload["net"] / float(max(1, payload.get("starting_stack") or 1))
+            if frac >= 0.5:
+                key = "big_win"
+            elif payload["net"] > 0:
+                key = "win"
+            elif frac <= -0.5:
+                key = "big_loss"
+            elif payload["net"] < 0:
+                key = "loss"
+            else:
+                key = "even"
+        en, zh = self.SEND_OFFS[key]
+        line = zh if self.lang == "zh" else en
+        tail = self._session_line(payload.get("session") or {"hands": 0})
+        return line + (" " + tail if tail else "")
+
     # -- owning the result -------------------------------------------------
 
     VERDICTS = {
@@ -577,6 +617,10 @@ DEFIANCE_SYSTEM = """You are {name}, {style}. You just told the player what to d
 
 Say ONE short sentence reacting to what they actually did. Dry, not preachy — you'll find out soon enough who was right. No JSON, no quotes."""
 
+SEND_OFF_SYSTEM = """You are {name}, {style}. The player is standing up from the table — the session is over, and this is your closing statement as you walk them out.
+
+Speak 2-4 short sentences: the night in one honest line, the one thing they genuinely did well, the one habit that needs fixing (only if their record shows one), and a send-off worth remembering. Warm, dry, in character. Never recite the numbers back, no lists, no JSON, no quotes."""
+
 REVIEW_SYSTEM = """You are {name}, {style}. The hand is over and you are debriefing your player — not one move, the whole hand.
 
 You get every decision you advised on: what you said, what they did, and a process grade computed from the numbers at the time ("fine" means the move was correct). You also get their running record for the session.
@@ -684,6 +728,39 @@ class LLMAdvisor(ModelCaller):
         if not line:
             return self.fallback.verdict(context)
         return tone, line
+
+    def send_off(self, payload):
+        """The written closing statement. A player who never played a hand gets
+        the canned line — there is nothing to sum up."""
+        if self.client is None or (payload.get("hands") or 0) <= 0:
+            return self.fallback.send_off(payload)
+        try:
+            s = payload.get("session") or {}
+            lines = [
+                "The session is over. %s played %d hands and leaves at %+d chips."
+                % (payload.get("name") or "Your player", payload["hands"], payload["net"]),
+            ]
+            if s.get("decisions"):
+                lines.append("They followed %d of %d advised decisions; net %+d on hands "
+                             "where they listened, %+d where they went their own way."
+                             % (s["followed"], s["decisions"],
+                                s["net_followed"], s["net_defied"]))
+                leaks = ", ".join("%s ×%d" % (GRADE_WORDS[k], n)
+                                  for k, n in (s.get("mistakes") or {}).items())
+                if leaks:
+                    lines.append("Recurring mistakes: %s." % leaks)
+            lines.append("")
+            lines.append("Walk them out. 2-4 spoken sentences.")
+            messages = [
+                {"role": "system", "content": SEND_OFF_SYSTEM.format(
+                    name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+                {"role": "user", "content": "\n".join(lines)},
+            ]
+            raw = self._create(messages, json_mode=False, effort="low")
+            text = " ".join(str(raw or "").split()).strip().strip('"')
+        except Exception:
+            return self.fallback.send_off(payload)
+        return text[:400] or self.fallback.send_off(payload)
 
     def review(self, ctx):
         """The written debrief. Short hands (one advised decision, small pot)

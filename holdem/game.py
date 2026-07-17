@@ -586,6 +586,42 @@ class TexasHoldemGame:
         if line:
             ui.advisor_verdict(line, tone, context)
 
+    def farewell_payload(self):
+        """The night in numbers, for the send-off at the door."""
+        human = self.human
+        if human is None:
+            return None
+        return {
+            "name": human.name,
+            "hands": self.hand_no,
+            "net": human.stack - human.debt - self.starting_stack,
+            "stack": human.stack,
+            "debt": human.debt,
+            "starting_stack": self.starting_stack,
+            "session": dict(self.coach_session,
+                            mistakes=dict(self.coach_session["mistakes"])),
+        }
+
+    def farewell(self):
+        """The player is leaving — the coach walks them to the door.
+
+        Called by the front-ends on their way out (the terminal after the run
+        ends, the web app when the Leave button is clicked), not by the engine
+        loop: leaving is a front-end event, but what gets said is the engine's
+        business. Never raises — a failed goodbye must not block the exit.
+        """
+        payload = self.farewell_payload()
+        if payload is None:
+            return
+        text = None
+        if self.advisor is not None:
+            try:
+                text = self.advisor.send_off(payload)
+            except Exception:
+                text = None
+        payload["text"] = text
+        ui.farewell(payload)
+
     def coach_review(self):
         """The whole hand, debriefed: every advised decision graded against the
         numbers it was made with, folded into the session ledger, and handed to
