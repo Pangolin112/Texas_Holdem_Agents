@@ -468,14 +468,18 @@ class LLMAdvisor(ModelCaller):
             return base
         ui.thinking(ADVISOR["name"])
         try:
+            # _merge stays INSIDE the try: the model can hand back junk in any
+            # field ("raise_to": "about 600"), and a coach that can't parse its
+            # own thought must shrug and advise on instinct — never take the
+            # whole table down through the betting loop.
             data = self._ask_advice(view, odds_payload, base)
+            return self._merge(base, data, view)
         except Exception as exc:
             if not self._warned:
                 ui.warn("the coach's uplink glitched (%s: %s) — advising on instinct."
                         % (type(exc).__name__, str(exc)[:100]))
                 self._warned = True
             return base
-        return self._merge(base, data, view)
 
     def _merge(self, base, data, view):
         """Take the model's call, but keep it legal and keep the arithmetic —

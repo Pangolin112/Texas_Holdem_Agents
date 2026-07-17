@@ -1580,6 +1580,16 @@ def test_llm_advisor_keeps_the_maths_and_falls_back():
     live._create = boom
     out = live.advise(view, _odds(0.2))
     ok(out["source"] == "instinct", "an API failure falls back to instinct silently")
+
+    # Valid JSON with junk inside is the nastier case: the API call succeeded,
+    # so only the merge can catch it — and a coach that can't parse its own
+    # thought must shrug, not crash the betting loop.
+    junky = advisor.LLMAdvisor(client=object(), model="x", rng=rng, lang="en",
+                               range_budget=0.01)
+    junky._create = lambda *a, **k: '{"action": "raise", "raise_to": "about 600"}'
+    out = junky.advise(view, _odds(0.2))
+    ok(out["source"] == "instinct" and out["action"] in (FOLD, CHECK, CALL, RAISE, ALL_IN),
+       "unparseable raise_to falls back to instinct instead of killing the table")
     ok(live.verdict({"followed": True, "right": True})[0] == advisor.TONE_TOLD_YOU,
        "...and so does the verdict")
     ok(live.on_defiance({"action": FOLD}, Action(CALL), view), "...and the reaction")

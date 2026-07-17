@@ -530,6 +530,11 @@ function handle(ev) {
     case "advice":
       G.advice = ev.advice;
       G.verdict = null;
+      // The advice IS the coach's answer — it's done thinking. Nothing else
+      // clears this (the events that clear a seat's flag are acting and
+      // talking, and the coach does neither), so without this line the panel
+      // sits on "reading the table…" through the player's whole turn.
+      if (G.thinking === (G.meta.coach_name || "Coach")) G.thinking = null;
       break;
     case "advisor_line":     // you went your own way and it had something to say
     case "advisor_verdict":  // the hand is over and it found out if it was right
@@ -581,6 +586,9 @@ function handle(ev) {
 
 function onAwait(ev) {
   G.mode = ev.mode;
+  // An input request means the engine is blocked waiting on the human —
+  // whatever was "thinking" has necessarily finished.
+  G.thinking = null;
   if (ev.mode === "action") {
     G.legal = ev.legal || {};
     showActionControls();
