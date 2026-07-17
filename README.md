@@ -342,6 +342,38 @@ would have happened — so it doesn't get to claim it was right, and it can't le
 what the mucked cards were. And if you go your own way mid-hand, it says
 something about that too, right then.
 
+**The debrief.** After the one-liner comes the whole hand, decision by decision
+— what it advised, what you did, and a **process grade** computed from the
+numbers each move was made against:
+
+```
+ ── the coach's debrief ──   this hand -60
+   PREFLOP  told FOLD    · you: calls 20    loose call — priced out
+   FLOP     told CHECK   · you: checks      ok
+   TURN     told FOLD    · you: calls 40    loose call — priced out
+   coach: "You paid for cards the price didn't justify. That's where the chips go."
+   session: 8 hands · followed 11/17 · net +120 listening, -380 your own way · loose calls ×4
+```
+
+Process, never results: a correct call that lost money is still graded fine,
+and a hand you *won* while checking a monster three streets still reads
+*missed value ×3* — which is exactly what a coach is for. Four grades exist:
+**scared fold** (the price was right), **loose call** (priced out), **raised
+while behind**, and **missed value**; marginal spots take no grade at all,
+because a debrief that nitpicks every coin flip teaches you to close the panel.
+
+Underneath sits the **session ledger** — 一直以来的打法: hands, how often you
+follow the advice, your net on hands where you listened versus hands where you
+went your own way, and your recurring leaks by name. The coach uses it to talk
+about *habits*, not moments ("这已经是今晚第四次松跟,老毛病得改了"), and it
+only names a habit once there's real evidence — under five hands, a pattern is
+a coincidence. With the API the debrief is written prose in character; offline
+(or on any API failure) it's built from the same grades with canned lines.
+Trivial hands — one advised decision, small pot — never spend a model call.
+
+In the browser the debrief sits inside the end-of-hand overlay, under the
+result table; in the terminal it prints after the hand result.
+
 Offline (or the moment the API coughs) the coach is pure arithmetic with canned
 lines — the advice never just disappears. Turn it off with `--no-coach` or the
 setup checkbox. It needs the equity numbers, so `--no-odds` turns it off too.

@@ -83,6 +83,39 @@ TONE_VINDICATED = "vindicated"  # you didn't listen, it cost you: "果然如此"
 TONE_HUMBLED = "humbled"        # it was wrong, and has to wear it
 TONE_SHRUG = "shrug"            # nothing to crow about either way
 
+# Process grades for the debrief: was the MOVE right by the numbers at the
+# time, regardless of how the cards fell. None means nothing to criticize.
+GRADE_SCARED_FOLD = "scared_fold"    # folded although the price was right
+GRADE_LOOSE_CALL = "loose_call"      # paid a price the equity didn't justify
+GRADE_WILD_RAISE = "wild_raise"      # raised while clearly behind
+GRADE_MISSED_VALUE = "missed_value"  # best hand, checked it anyway
+
+
+def grade_decision(advice, action):
+    """Judge what the player actually did against the numbers it was done
+    against — process, not results. A good call that lost money is still a
+    good call, and this is the function that knows it.
+
+    Deliberately generous: only clear breaches get a grade, because a debrief
+    that nitpicks every marginal choice teaches the player to close the panel.
+    """
+    if action is None or not advice:
+        return None
+    margin = advice["adjusted"] - advice["pot_odds"]
+    kind = action.kind
+    if advice["to_call"] > 0:
+        if kind == FOLD and margin >= 0.08:
+            return GRADE_SCARED_FOLD
+        if kind == CALL and margin <= -0.05:
+            return GRADE_LOOSE_CALL
+        if kind in (RAISE, ALL_IN) and margin <= -0.08:
+            return GRADE_WILD_RAISE
+    else:
+        if kind == CHECK and advice["action"] in (RAISE, ALL_IN) \
+                and advice["adjusted"] >= 0.70:
+            return GRADE_MISSED_VALUE
+    return None
+
 
 def read_opponents(players, actions, street, estimates=None):
     """What each live opponent's betting says about their hand.
@@ -434,6 +467,68 @@ class HeuristicAdvisor:
         en, zh = self.rng.choice(options)
         return zh if self.lang == "zh" else en
 
+    # -- the debrief -------------------------------------------------------
+
+    REVIEW_LINES = {
+        GRADE_SCARED_FOLD: (
+            "You folded getting the right price — that's the mistake I mind most.",
+            "价格明明合适你却弃了——这种错我最在意。"),
+        GRADE_LOOSE_CALL: (
+            "You paid for cards the price didn't justify. That's where the chips go.",
+            "这个价不值,你还是跟了。筹码就是这么漏掉的。"),
+        GRADE_WILD_RAISE: (
+            "You raised into a range that had you beat.",
+            "明明落后还去加注,这是给人送钱。"),
+        GRADE_MISSED_VALUE: (
+            "Best hand at the table and you let them see cards for free.",
+            "拿着最好的牌却让他们免费看牌,亏的是本该赢的钱。"),
+    }
+    REVIEW_CLEAN = [
+        ("Clean hand. Every decision was right by the numbers.", "这手打得干净,每个决定都对得起数字。"),
+        ("Nothing to fix there. Do it again.", "没什么可挑的,下次还这么打。"),
+    ]
+    SESSION_LINES = {
+        "loose": ("Same leak as before: you call too much.", "还是老毛病:你跟得太松。"),
+        "scared": ("You keep folding hands the price says to play. Trust the maths.",
+                   "你总把该打的牌弃掉。相信赔率。"),
+        "defiance_costs": ("And the record says it plainly: the hands where you ignore me "
+                           "are the ones costing you.",
+                           "而且账本摆在这:不听劝的那些手,正是在亏钱的手。"),
+    }
+
+    def review(self, ctx):
+        """The whole hand in one or two spoken sentences: the worst process
+        mistake if there was one, praise if there wasn't, and the session-long
+        habit when the record actually shows one."""
+        graded = [r for r in ctx["decisions"] if r["grade"]]
+        if graded:
+            en, zh = self.REVIEW_LINES[graded[-1]["grade"]]
+        else:
+            en, zh = self.rng.choice(self.REVIEW_CLEAN)
+        line = zh if self.lang == "zh" else en
+        tail = self._session_line(ctx["session"])
+        return line + (" " + tail if tail else "")
+
+    def _session_line(self, s):
+        """One sentence about the pattern — only when there is enough of one.
+        A habit needs evidence; two hands of anything is a coincidence."""
+        if s["hands"] < 5:
+            return None
+        key = None
+        mistakes = s.get("mistakes") or {}
+        if mistakes.get(GRADE_LOOSE_CALL, 0) >= 3:
+            key = "loose"
+        elif mistakes.get(GRADE_SCARED_FOLD, 0) >= 3:
+            key = "scared"
+        elif (s["decisions"] >= 6
+              and s["followed"] < 0.5 * s["decisions"]
+              and s["net_defied"] < s["net_followed"]):
+            key = "defiance_costs"
+        if key is None:
+            return None
+        en, zh = self.SESSION_LINES[key]
+        return zh if self.lang == "zh" else en
+
 
 def verdict_tone(context):
     """Which way the coach gets to talk, given what actually happened.
@@ -481,6 +576,12 @@ Never explain at length, never moralize, never repeat the numbers back. One sent
 DEFIANCE_SYSTEM = """You are {name}, {style}. You just told the player what to do and they did something else, right in front of you.
 
 Say ONE short sentence reacting to what they actually did. Dry, not preachy — you'll find out soon enough who was right. No JSON, no quotes."""
+
+REVIEW_SYSTEM = """You are {name}, {style}. The hand is over and you are debriefing your player — not one move, the whole hand.
+
+You get every decision you advised on: what you said, what they did, and a process grade computed from the numbers at the time ("fine" means the move was correct). You also get their running record for the session.
+
+Write 2-3 short spoken sentences. Judge the PROCESS, never the result — a correct call that lost money was still correct, and when that happened you say so out loud. Pick the ONE thing most worth fixing (or praising) this hand. If the session record shows the same mistake repeating, name the habit plainly. Don't recite the numbers back, don't make lists, don't lecture. No JSON, no quotes."""
 
 
 class LLMAdvisor(ModelCaller):
@@ -583,6 +684,24 @@ class LLMAdvisor(ModelCaller):
         if not line:
             return self.fallback.verdict(context)
         return tone, line
+
+    def review(self, ctx):
+        """The written debrief. Short hands (one advised decision, small pot)
+        stay on canned lines — a model call per trivial fold is all cost and no
+        insight; the engine flags which hands are worth real prose."""
+        if self.client is None or not ctx.get("worth_prose"):
+            return self.fallback.review(ctx)
+        try:
+            messages = [
+                {"role": "system", "content": REVIEW_SYSTEM.format(
+                    name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+                {"role": "user", "content": build_review_prompt(ctx)},
+            ]
+            raw = self._create(messages, json_mode=False, effort="low")
+            text = " ".join(str(raw or "").split()).strip().strip('"')
+        except Exception:
+            return self.fallback.review(ctx)
+        return text[:400] or self.fallback.review(ctx)
 
     def on_defiance(self, advice, action, view):
         if self.client is None:
@@ -698,6 +817,42 @@ def format_actions(actions, players, reads=None):
                 row += "  ->  bluffing about %.0f%% of the time" % (read["bluff"] * 100)
             rows.append(row)
     return "\n".join(rows) or "- (nobody has acted yet)"
+
+
+GRADE_WORDS = {
+    GRADE_SCARED_FOLD: "scared fold (the price was right)",
+    GRADE_LOOSE_CALL: "loose call (priced out)",
+    GRADE_WILD_RAISE: "raised while behind",
+    GRADE_MISSED_VALUE: "missed value (a bet was owed)",
+}
+
+
+def build_review_prompt(ctx):
+    lines = ["Hand #%d just ended. Net for your player: %+d chips."
+             % (ctx["hand_no"], ctx["net"]),
+             "", "Their decisions this hand:"]
+    for r in ctx["decisions"]:
+        advised = r["advised"]["action"]
+        if advised == RAISE and r["advised"]["amount"]:
+            advised = "raise to %d" % r["advised"]["amount"]
+        lines.append("- %s: you said %s, they %s. Their equity vs ranges was %.0f%%, "
+                     "the price %.0f%%. Grade: %s"
+                     % (r["street"].lower(), advised, r["did"],
+                        r["equity"] * 100, r["price"] * 100,
+                        GRADE_WORDS.get(r["grade"], "fine")))
+    s = ctx["session"]
+    lines.append("")
+    lines.append("Session so far: %d hands; they followed %d of %d advised decisions; "
+                 "net %+d on hands where they listened, %+d where they went their own way."
+                 % (s["hands"], s["followed"], s["decisions"],
+                    s["net_followed"], s["net_defied"]))
+    leaks = ", ".join("%s ×%d" % (GRADE_WORDS[k], n)
+                      for k, n in (s.get("mistakes") or {}).items())
+    if leaks:
+        lines.append("Recurring mistakes: %s." % leaks)
+    lines.append("")
+    lines.append("Debrief them now, out loud, 2-3 sentences.")
+    return "\n".join(lines)
 
 
 def build_verdict_prompt(context, tone):

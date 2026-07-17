@@ -47,6 +47,12 @@ class TexasHoldemGame:
         # The coach behind the player's chair (holdem/advisor.py), or None for
         # nobody. It needs the equity numbers, so it can't work without them.
         self.advisor = advisor if show_odds else None
+        # The coach's ledger on the player, across the whole session — this is
+        # what lets the debrief talk about habits instead of moments. Never
+        # reset between hands; that's the point of it.
+        self.coach_session = {"hands": 0, "decisions": 0, "followed": 0,
+                              "net": 0, "net_followed": 0, "net_defied": 0,
+                              "mistakes": {}}
         self.starting_stack = players[0].stack if players else 0
         self.button_idx = 0
         self.hand_no = 0
@@ -474,6 +480,7 @@ class TexasHoldemGame:
                 self.showdown()
         self.show_hand_result()
         self.advisor_verdict()   # the coach finds out whether it was right
+        self.coach_review()      # ...and debriefs the whole hand, on the record
 
     def new_street(self):
         for p in self.hand_players:
@@ -578,6 +585,62 @@ class TexasHoldemGame:
         tone, line = self.advisor.verdict(context)
         if line:
             ui.advisor_verdict(line, tone, context)
+
+    def coach_review(self):
+        """The whole hand, debriefed: every advised decision graded against the
+        numbers it was made with, folded into the session ledger, and handed to
+        the coach to talk about — the hand's process, and the player's habits.
+        """
+        if self.advisor is None:
+            return
+        human = self.human
+        if human is None or not human.hole:
+            return
+        entries = [e for e in self.advice_log if e["action"] is not None]
+        if not entries:
+            return
+        net = self.hand_winnings.get(human.name, 0) - human.committed
+        rows = []
+        for e in entries:
+            adv = e["advice"]
+            rows.append({
+                "street": e["street"],
+                "advised": {"action": adv["action"], "amount": adv.get("amount") or 0},
+                "did": e["desc"],
+                "followed": bool(e["followed"]),
+                "grade": advisor.grade_decision(adv, e["action"]),
+                "equity": adv["adjusted"],
+                "price": adv["pot_odds"],
+                "danger": adv.get("danger"),
+            })
+
+        s = self.coach_session
+        s["hands"] += 1
+        s["decisions"] += len(rows)
+        s["followed"] += sum(1 for r in rows if r["followed"])
+        s["net"] += net
+        # A hand's result is attributed to whether they listened THAT hand —
+        # one defiance owns the outcome, since one wrong turn is all it takes.
+        if all(r["followed"] for r in rows):
+            s["net_followed"] += net
+        else:
+            s["net_defied"] += net
+        for r in rows:
+            if r["grade"]:
+                s["mistakes"][r["grade"]] = s["mistakes"].get(r["grade"], 0) + 1
+
+        ctx = {
+            "hand_no": self.hand_no,
+            "net": net,
+            "decisions": rows,
+            "session": dict(s, mistakes=dict(s["mistakes"])),
+            # One quick decision on a tiny pot doesn't deserve model prose —
+            # the fallback's canned line covers it, free.
+            "worth_prose": len(rows) >= 2 or abs(net) >= 5 * self.bb,
+        }
+        text = self.advisor.review(ctx)
+        ui.hand_review({"hand_no": self.hand_no, "net": net, "decisions": rows,
+                        "session": ctx["session"], "text": text})
 
     def shown_ranks(self):
         """Hands the human could legitimately work out for themselves: the ones

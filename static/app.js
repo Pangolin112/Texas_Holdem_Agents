@@ -101,6 +101,18 @@ const I18N = {
     bucket_weak: "weak", bucket_air: "air",
     danger_0: "all clear", danger_1: "looking good", danger_2: "close spot",
     danger_3: "danger", danger_4: "serious danger",
+    /* the debrief */
+    rr_title: "The coach's debrief",
+    rr_told: "told", rr_ok: "✓ fine", rr_net: "this hand {n}",
+    just_call: "Call",
+    grade_scared_fold: "scared fold — the price was right",
+    grade_loose_call: "loose call — you were priced out",
+    grade_wild_raise: "raised while behind",
+    grade_missed_value: "missed value — a bet was owed",
+    leak_scared_fold: "scared folds", leak_loose_call: "loose calls",
+    leak_wild_raise: "wild raises", leak_missed_value: "missed value",
+    rr_session: "{h} hands · followed {f}/{d} · net {nf} listening, {nd} your own way",
+    rr_leaks: "leaks: {list}",
     follow_ai: "Follow the coach",
     auto_coach: "Follow the coach this street",
     auto_on_auto_advisor: "armed — doing whatever the coach says this street (click again to cancel)",
@@ -201,6 +213,18 @@ const I18N = {
     bucket_weak: "很弱", bucket_air: "空气",
     danger_0: "安全", danger_1: "占优", danger_2: "胶着",
     danger_3: "危险", danger_4: "高危",
+    /* the debrief */
+    rr_title: "AI 教练复盘",
+    rr_told: "建议", rr_ok: "✓ 没毛病", rr_net: "本手净 {n}",
+    just_call: "跟注",
+    grade_scared_fold: "怂弃——价格明明合适",
+    grade_loose_call: "松跟——这个价不值",
+    grade_wild_raise: "落后还加注",
+    grade_missed_value: "错过价值——该下注的",
+    leak_scared_fold: "怂弃", leak_loose_call: "松跟",
+    leak_wild_raise: "乱加注", leak_missed_value: "漏价值",
+    rr_session: "共 {h} 手 · 听劝 {f}/{d} · 听劝净 {nf} · 自己打净 {nd}",
+    rr_leaks: "漏洞:{list}",
     follow_ai: "遵循 AI",
     auto_coach: "本轮跟随 AI",
     auto_on_auto_advisor: "已预约：本轮听教练的（再点一次取消）",
@@ -336,6 +360,7 @@ const G = {
   odds: null,         // newest live read for our seat (null until one arrives)
   advice: null,       // the coach's call on the spot in front of us
   verdict: null,      // its word once the hand is over
+  review: null,       // the debrief: decisions graded + session ledger
   result: null,       // finished-hand review: every seat's cards + formula
   actions: {},        // name -> {key, n, k}: each seat's latest move this street
   accessCode: null,   // remembered ACCESS_CODE, if the host requires one
@@ -489,7 +514,7 @@ function handle(ev) {
       resetSummary();
       hideResult();
       G.odds = null; G.result = null;
-      G.advice = null; G.verdict = null;
+      G.advice = null; G.verdict = null; G.review = null;
       G.actions = {};
       G.thinking = null;
       feed(t("feed_hand", { n: ev.hand_no, sb: ev.sb, bb: ev.bb, dealer: esc(ev.dealer) }), "sys");
@@ -545,6 +570,14 @@ function handle(ev) {
       G.verdict = { text: ev.text, tone: ev.tone || "defiance" };
       feed(`<span class="who">${esc(coachName())}</span>: "${esc(ev.text)}"`, "coach");
       if (typeof speak === "function") speak(G.meta.coach_name || "Coach", ev.text);
+      break;
+    case "hand_review":
+      // The debrief lands moments after the result overlay opens (the coach
+      // was writing it) — refresh the overlay so it slots in underneath.
+      G.review = ev.review;
+      if (ev.review && ev.review.text)
+        feed(`<span class="who">${esc(coachName())}</span>: "${esc(ev.review.text)}"`, "coach");
+      if (G.result && !$("result").classList.contains("hidden")) showResult();
       break;
     case "autopilot":
       // The snapshot carries the armed mode; this event just wakes the render.
@@ -1048,9 +1081,54 @@ function showResult() {
     ? (r.board || []).map((c) => cardHTML(c, "mini")).join("")
     : `<span class="dim">${t("res_preflop")}</span>`;
   $("result-rows").innerHTML = (r.players || []).map(resultRow).join("");
+  renderReview();
   $("result-note").textContent =
     (r.players || []).some((p) => !p.known) ? t("res_note") : "";
   $("result").classList.remove("hidden");
+}
+
+/* ---- the coach's debrief, under the result table ---- */
+
+function advisedLabel(a) {
+  if (!a) return "";
+  if (a.action === "raise" && a.amount) return t("raise_to_n", { n: a.amount });
+  return { fold: t("fold"), check: t("check"), call: t("just_call"),
+           all_in: t("allin") }[a.action] || a.action;
+}
+
+function signed(n) { return (n >= 0 ? "+" : "") + n; }
+
+function renderReview() {
+  const el = $("result-review");
+  const r = G.review;
+  if (!r || r.hand_no !== (G.result && G.result.hand_no)) {
+    el.className = "result-review hidden";
+    el.innerHTML = "";
+    return;
+  }
+  const rows = (r.decisions || []).map((d) => {
+    const grade = d.grade
+      ? `<span class="rr-grade">${esc(t("grade_" + d.grade))}</span>`
+      : `<span class="rr-fine">${esc(t("rr_ok"))}</span>`;
+    return `<div class="rr-row">` +
+      `<span class="rr-street">${esc(trStreet(d.street))}</span>` +
+      `<span class="rr-advised">${esc(t("rr_told"))} ${esc(advisedLabel(d.advised))}</span>` +
+      `<span class="rr-did">${esc(trActionDesc(d.did))}</span>${grade}</div>`;
+  }).join("");
+  const s = r.session || {};
+  const leaks = Object.entries(s.mistakes || {})
+    .map(([k, n]) => t("leak_" + k) + "×" + n).join(" · ");
+  const session = t("rr_session", {
+    h: s.hands, f: s.followed, d: s.decisions,
+    nf: signed(s.net_followed || 0), nd: signed(s.net_defied || 0),
+  }) + (leaks ? " · " + t("rr_leaks", { list: leaks }) : "");
+  el.className = "result-review";
+  el.innerHTML =
+    `<div class="rr-head"><span>${esc(t("rr_title"))}</span>` +
+    `<span class="rr-net">${esc(t("rr_net", { n: signed(r.net) }))}</span></div>` +
+    rows +
+    (r.text ? `<div class="rr-text">“${esc(r.text)}”</div>` : "") +
+    `<div class="rr-session">${esc(session)}</div>`;
 }
 
 function hideResult() { $("result").classList.add("hidden"); }

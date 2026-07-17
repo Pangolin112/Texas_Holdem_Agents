@@ -329,6 +329,9 @@ class WebSink(ui.Sink):
         self.send("advisor_verdict", text=text, tone=tone,
                   followed=bool(context.get("followed")), net=context.get("net"))
 
+    def hand_review(self, review):
+        self.send("hand_review", review=review)
+
     def autopilot(self, player, mode):
         self.send("autopilot", name=player.name, mode=mode)
 

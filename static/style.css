@@ -585,6 +585,36 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .result .card.own { box-shadow: 0 0 0 2px var(--gold), 0 3px 8px rgba(0,0,0,.4); }
 .result-note { font-size: 11px; margin-top: 10px; }
 
+/* the coach's debrief, under the result rows */
+.result-review {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(0,0,0,.3); border: 1px solid #3a3350;
+}
+.rr-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  color: #b39ddb; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  margin-bottom: 7px;
+}
+.rr-net { color: var(--gold); text-transform: none; letter-spacing: 0; font-weight: 700; font-size: 12px; }
+.rr-row {
+  display: grid; grid-template-columns: 64px 110px 1fr auto;
+  gap: 8px; align-items: baseline; font-size: 12px; padding: 2px 0;
+}
+.rr-street { color: var(--dim); font-size: 11px; }
+.rr-advised { color: #c9b6ea; }
+.rr-did { color: #c4cdd5; }
+.rr-grade {
+  font-size: 10.5px; font-weight: 700; padding: 1px 8px; border-radius: 8px;
+  background: #4a1f1a; color: #ff8f7e; border: 1px solid #7a2e26; white-space: nowrap;
+}
+.rr-fine { font-size: 10.5px; color: #6fdd8b; white-space: nowrap; }
+.rr-text {
+  margin-top: 8px; padding: 7px 10px; border-left: 3px solid #b39ddb;
+  background: rgba(0,0,0,.3); border-radius: 8px;
+  color: #d9c6ea; font-size: 12.5px; line-height: 1.5;
+}
+.rr-session { margin-top: 8px; color: var(--dim); font-size: 11px; }
+
 @media (max-width: 900px) {
   .result { padding: 8px; }
   .res-row { min-width: 520px; }

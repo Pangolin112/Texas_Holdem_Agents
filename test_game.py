@@ -870,6 +870,7 @@ class RecordingSink(ui.Sink):
         self.advices = []   # not `advice`: that would shadow the sink method
         self.lines = []
         self.verdicts = []
+        self.reviews = []
 
     def hand_result(self, hand_no, rows, board):
         self.results.append({"hand_no": hand_no, "rows": rows, "board": board})
@@ -888,6 +889,9 @@ class RecordingSink(ui.Sink):
 
     def advisor_verdict(self, text, tone, context):
         self.verdicts.append((text, tone, context))
+
+    def hand_review(self, review):
+        self.reviews.append(review)
 
 
 def result_game(reveal_all=False):
@@ -1353,6 +1357,127 @@ def test_advice_carries_the_numbers_it_reasoned_from():
     ok(a["source"] == "instinct", "and it says where the advice came from")
 
 
+def test_decision_grades_judge_process_not_results():
+    grade = advisor.grade_decision
+    ahead = {"to_call": 100, "adjusted": 0.50, "pot_odds": 0.30, "action": CALL, "amount": 0}
+    ok(grade(ahead, Action(FOLD)) == advisor.GRADE_SCARED_FOLD,
+       "folding while ahead of the price is the scared fold")
+    ok(grade(ahead, Action(CALL)) is None, "taking the +EV call is fine")
+    ok(grade(ahead, Action(RAISE, 300)) is None, "so is raising with it")
+
+    behind = {"to_call": 100, "adjusted": 0.20, "pot_odds": 0.40, "action": FOLD, "amount": 0}
+    ok(grade(behind, Action(CALL)) == advisor.GRADE_LOOSE_CALL,
+       "paying a price the equity doesn't justify is the loose call")
+    ok(grade(behind, Action(RAISE, 300)) == advisor.GRADE_WILD_RAISE,
+       "raising while clearly behind is worse than calling")
+    ok(grade(behind, Action(FOLD)) is None, "folding it is exactly right")
+
+    monster = {"to_call": 0, "adjusted": 0.85, "pot_odds": 0.0, "action": RAISE, "amount": 200}
+    ok(grade(monster, Action(CHECK)) == advisor.GRADE_MISSED_VALUE,
+       "checking a monster the coach wanted bet is missed value")
+    ok(grade(monster, Action(RAISE, 150)) is None, "betting it is fine, any size")
+    medium = {"to_call": 0, "adjusted": 0.55, "pot_odds": 0.0, "action": CHECK, "amount": 0}
+    ok(grade(medium, Action(CHECK)) is None, "checking a medium hand is not a leak")
+
+    close = {"to_call": 100, "adjusted": 0.34, "pot_odds": 0.33, "action": CALL, "amount": 0}
+    ok(grade(close, Action(FOLD)) is None and grade(close, Action(CALL)) is None,
+       "marginal spots take no grade either way — nitpicking teaches people to close the panel")
+
+
+def _log_entry(street, advised, taken, adjusted, price, followed):
+    adv = {"action": advised, "amount": 0, "adjusted": adjusted,
+           "pot_odds": price, "to_call": 100 if price > 0 else 0,
+           "danger": 2, "line": ""}
+    return {"street": street, "advice": adv, "action": Action(taken),
+            "desc": "%ss" % taken, "followed": followed}
+
+
+def test_coach_review_debriefs_and_keeps_the_ledger():
+    game, hero, a, b = coach_game()
+    hero.committed = 200
+    game.hand_winnings = {}
+    game.advice_log = [
+        _log_entry("FLOP", CALL, CALL, 0.50, 0.30, True),
+        _log_entry("TURN", FOLD, CALL, 0.20, 0.40, False),   # a loose call
+    ]
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        game.coach_review()
+    finally:
+        ui.set_sink(None)
+    ok(len(sink.reviews) == 1, "the hand gets one debrief")
+    r = sink.reviews[0]
+    ok(r["net"] == -200, "with the hand's real net on it")
+    ok([d["grade"] for d in r["decisions"]] == [None, advisor.GRADE_LOOSE_CALL],
+       "each decision graded on the numbers it was made against")
+    ok(r["text"], "and the coach says something about it")
+    s = r["session"]
+    ok(s["hands"] == 1 and s["decisions"] == 2 and s["followed"] == 1,
+       "the ledger counts the hand")
+    ok(s["net_defied"] == -200 and s["net_followed"] == 0,
+       "one defiance owns the hand's result")
+    ok(s["mistakes"] == {advisor.GRADE_LOOSE_CALL: 1}, "and books the leak")
+
+    # A second, clean and obedient hand accumulates instead of resetting.
+    hero.committed = 50
+    game.hand_winnings = {hero.name: 350}
+    game.advice_log = [_log_entry("FLOP", CALL, CALL, 0.60, 0.30, True)]
+    ui.set_sink(sink)
+    try:
+        game.coach_review()
+    finally:
+        ui.set_sink(None)
+    s2 = sink.reviews[1]["session"]
+    ok(s2["hands"] == 2 and s2["net_followed"] == 300 and s2["net_defied"] == -200,
+       "the ledger is the whole session, not one hand")
+    ok(game.coach_session["hands"] == 2, "and it lives on the game, across hands")
+
+    # No advised decisions -> nothing to debrief; no coach -> silence.
+    game.advice_log = []
+    ui.set_sink(sink)
+    try:
+        game.coach_review()
+        game.advice_log = [_log_entry("FLOP", CALL, CALL, 0.5, 0.3, True)]
+        game.advisor = None
+        game.coach_review()
+    finally:
+        ui.set_sink(None)
+    ok(len(sink.reviews) == 2, "no advice or no coach means no debrief")
+
+
+def test_review_text_names_the_habit_only_with_evidence():
+    coach = advisor.HeuristicAdvisor(random.Random(1), lang="en")
+    rows = [{"street": "FLOP", "advised": {"action": CALL, "amount": 0},
+             "did": "calls", "followed": True, "grade": advisor.GRADE_LOOSE_CALL,
+             "equity": 0.2, "price": 0.4, "danger": 3}]
+    young = {"hand_no": 2, "net": -100, "decisions": rows, "worth_prose": True,
+             "session": {"hands": 2, "decisions": 3, "followed": 1, "net": -100,
+                         "net_followed": 0, "net_defied": -100,
+                         "mistakes": {advisor.GRADE_LOOSE_CALL: 1}}}
+    t1 = coach.review(young)
+    ok("leak" not in t1 and "老毛病" not in t1,
+       "two hands of data is a coincidence, not a habit — no pattern talk yet")
+    old = dict(young, session={"hands": 12, "decisions": 20, "followed": 15,
+                               "net": -400, "net_followed": 100, "net_defied": -500,
+                               "mistakes": {advisor.GRADE_LOOSE_CALL: 4}})
+    t2 = coach.review(old)
+    ok("call too much" in t2, "four booked loose calls is a habit, and it gets named")
+
+    zh = advisor.HeuristicAdvisor(random.Random(1), lang="zh").review(old)
+    ok("跟得太松" in zh, "...in the table's language")
+
+    # The LLM path degrades to exactly this on any failure, and skips the model
+    # for hands not worth prose.
+    llm = advisor.LLMAdvisor(client=object(), model="x", rng=random.Random(2),
+                             lang="en", range_budget=0.01)
+    llm._create = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("down"))
+    ok(llm.review(old), "a dead uplink still produces a debrief")
+    cheap = dict(old, worth_prose=False)
+    llm._create = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not be called"))
+    ok(llm.review(cheap), "a trivial hand never spends a model call")
+
+
 def test_danger_scale_tracks_the_spot():
     dl = advisor.danger_level
     ok(dl(0.75, 0.30, 0.5, 100) == 0, "far ahead of the price: all clear (white)")
@@ -1711,6 +1836,9 @@ if __name__ == "__main__":
     test_advice_prices_real_hands_end_to_end()
     test_advice_carries_the_numbers_it_reasoned_from()
     test_danger_scale_tracks_the_spot()
+    test_decision_grades_judge_process_not_results()
+    test_coach_review_debriefs_and_keeps_the_ledger()
+    test_review_text_names_the_habit_only_with_evidence()
     test_followed_advice_is_judged_on_intent()
     test_verdict_tone_matrix()
     test_verdict_context_judges_only_what_the_table_showed()

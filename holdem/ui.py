@@ -90,6 +90,9 @@ class Sink:
     def advisor_verdict(self, text, tone, context):
         pass
 
+    def hand_review(self, review):
+        pass
+
     def autopilot(self, player, mode):
         pass
 
@@ -493,6 +496,51 @@ def advisor_verdict(text, tone, context=None):
         return
     out()
     out(_c(C.MAGENTA, '   coach: "%s"' % text))
+
+
+GRADE_LABELS = {
+    "scared_fold": "scared fold — the price was right",
+    "loose_call": "loose call — priced out",
+    "wild_raise": "raised while behind",
+    "missed_value": "missed value — a bet was owed",
+}
+LEAK_LABELS = {
+    "scared_fold": "scared folds", "loose_call": "loose calls",
+    "wild_raise": "wild raises", "missed_value": "missed value",
+}
+
+
+def hand_review(review):
+    """The debrief: every advised decision this hand graded on process, the
+    coach's word on it, and the session ledger underneath."""
+    sink = get_sink()
+    if sink is not None:
+        sink.hand_review(review)
+        return
+    if not review:
+        return
+    out()
+    out(bold(" ── the coach's debrief ──")
+        + dim("   this hand %+d" % review["net"]))
+    for r in review["decisions"]:
+        advised = ADVICE_VERBS.get(r["advised"]["action"], r["advised"]["action"])
+        if r["advised"]["action"] == "raise" and r["advised"]["amount"]:
+            advised += " to %d" % r["advised"]["amount"]
+        grade = r["grade"]
+        mark = (_c(C.RED, GRADE_LABELS.get(grade, grade)) if grade
+                else _c(C.GREEN, "ok"))
+        out("   %s told %s · you: %s  %s"
+            % (dim(_pad(r["street"], 8)), _pad(advised, 13),
+               _pad(r["did"], 18), mark))
+    if review.get("text"):
+        out(_c(C.MAGENTA, '   coach: "%s"' % review["text"]))
+    s = review["session"]
+    leaks = " · ".join("%s ×%d" % (LEAK_LABELS.get(k, k), n)
+                       for k, n in s["mistakes"].items())
+    out(dim("   session: %d hands · followed %d/%d · net %+d listening, %+d your own way%s"
+            % (s["hands"], s["followed"], s["decisions"],
+               s["net_followed"], s["net_defied"],
+               ("  ·  " + leaks) if leaks else "")))
 
 
 AUTOPILOT_LABELS = {
