@@ -53,6 +53,8 @@ def parse_args():
     parser.add_argument("--show-cards", action="store_true",
                         help="peek mode: reveal every opponent's hole cards after "
                              "each hand ends (spoiler — for study/debugging)")
+    parser.add_argument("--no-odds", action="store_true",
+                        help="don't show your live hand strength and win odds")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
     parser.add_argument("--lang", choices=("en", "zh"), default="en",
                         help="table language: what the agents speak "
@@ -125,7 +127,8 @@ def main():
     print(ui.dim(" Type 'h' on your turn for the commands. Good luck.\n"))
 
     game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng,
-                           reveal_all=args.show_cards, language=args.lang)
+                           reveal_all=args.show_cards, language=args.lang,
+                           show_odds=not args.no_odds)
     try:
         game.run()
     except (QuitGame, KeyboardInterrupt):

@@ -19,6 +19,20 @@ TWO_PAIR = 2
 PAIR = 1
 HIGH_CARD = 0
 
+# Short label per category, for the odds table (hand_name below writes the full
+# phrase, kickers and all, for a hand that actually exists).
+CATEGORY_NAMES = {
+    STRAIGHT_FLUSH: "Straight Flush",
+    FOUR_OF_A_KIND: "Four of a Kind",
+    FULL_HOUSE: "Full House",
+    FLUSH: "Flush",
+    STRAIGHT: "Straight",
+    THREE_OF_A_KIND: "Three of a Kind",
+    TWO_PAIR: "Two Pair",
+    PAIR: "Pair",
+    HIGH_CARD: "High Card",
+}
+
 
 def evaluate_five(cards):
     """Rank exactly five cards."""
@@ -66,6 +80,87 @@ def best_hand(cards):
         if best_rank is None or rank > best_rank:
             best_rank, best_five = rank, combo
     return best_rank, list(best_five)
+
+
+# --------------------------------------------------------------------------- #
+# Fast path: rank 5-7 cards without trying all 21 combinations.
+#
+# `best_hand` is the readable one and it also hands back the five cards that
+# played, which is what the table shows. The odds simulator, though, ranks
+# every seat on every rollout and never needs the cards back — so it goes
+# through `rank_cards`, which reads the hand straight off rank/suit counts.
+# The two agree exactly: test_game.py checks them against each other over
+# random deals, which is what lets this live next to the obvious version.
+# --------------------------------------------------------------------------- #
+
+def _straight_high(values):
+    """Highest card of the best straight in `values` (distinct, descending);
+    0 if there's no straight. Scanning downward means the first run of five
+    found is already the best one."""
+    run = 1
+    for i in range(1, len(values)):
+        if values[i] == values[i - 1] - 1:
+            run += 1
+            if run == 5:
+                return values[i] + 4
+        else:
+            run = 1
+    if values[0] == 14 and values[-4:] == [5, 4, 3, 2]:
+        return 5  # the wheel: the ace drops to the bottom
+    return 0
+
+
+def _group_key(item):
+    value, count = item
+    return (count, value)
+
+
+def rank_cards(cards):
+    """Rank the best five of 5-7 cards, returning only the rank tuple.
+
+    Same tuple `best_hand` would return, minus the cards themselves.
+    """
+    counts = {}
+    suit_counts = {}
+    for c in cards:
+        counts[c.value] = counts.get(c.value, 0) + 1
+        suit_counts[c.suit] = suit_counts.get(c.suit, 0) + 1
+
+    flush_values = None
+    for suit, n in suit_counts.items():
+        if n >= 5:  # with seven cards at most one suit can reach five
+            flush_values = sorted((c.value for c in cards if c.suit == suit),
+                                  reverse=True)
+            high = _straight_high(flush_values)
+            if high:
+                return (STRAIGHT_FLUSH, high)
+            break
+
+    groups = sorted(counts.items(), key=_group_key, reverse=True)
+    top_value, top_count = groups[0]
+
+    if top_count == 4:
+        return (FOUR_OF_A_KIND, top_value,
+                max(v for v in counts if v != top_value))
+    if top_count == 3 and groups[1][1] >= 2:
+        # A second trip counts as the pair — only two of it can play.
+        return (FULL_HOUSE, top_value, groups[1][0])
+    if flush_values is not None:
+        return tuple([FLUSH] + flush_values[:5])
+
+    values = sorted(counts, reverse=True)  # distinct ranks, high to low
+    high = _straight_high(values)
+    if high:
+        return (STRAIGHT, high)
+    if top_count == 3:
+        return (THREE_OF_A_KIND, top_value) + tuple(v for v in values if v != top_value)[:2]
+    if top_count == 2 and groups[1][1] == 2:
+        second = groups[1][0]
+        return (TWO_PAIR, top_value, second,
+                max(v for v in counts if v != top_value and v != second))
+    if top_count == 2:
+        return (PAIR, top_value) + tuple(v for v in values if v != top_value)[:3]
+    return tuple([HIGH_CARD] + values[:5])
 
 
 def hand_name(rank):

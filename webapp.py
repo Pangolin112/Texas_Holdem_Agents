@@ -34,7 +34,7 @@ from holdem import ui
 from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, build_model_chain
 from holdem.cards import RED_SUITS, SUIT_SYMBOLS, VALUE_CHARS, VALUE_LABELS
 from holdem.game import TexasHoldemGame
-from holdem.players import HumanPlayer, LLMPlayer
+from holdem.players import AUTO_FOLD, AUTOPILOT_MODES, HumanPlayer, LLMPlayer
 from holdem.ui import QuitGame
 from holdem import evaluator
 
@@ -116,6 +116,7 @@ class Session:
         self.chat_queue = queue.Queue() # browser -> table talk, ANY time
         self.alive = True
         self.last_state = None          # newest full table snapshot (for reconnects)
+        self.last_odds = None           # newest odds event (ditto — see emit)
         self.pending_await = None       # the current input request, if blocked
         self.sink = None
         self.thread = None
@@ -126,6 +127,14 @@ class Session:
     def emit(self, event):
         if event.get("state") is not None:
             self.last_state = event["state"]
+        # Odds are sent once per spot, not folded into every snapshot, so a tab
+        # that reconnects mid-hand would sit with an empty panel until the next
+        # street. Keep the last one to replay, and drop it when the deal changes.
+        kind = event.get("type")
+        if kind == "odds":
+            self.last_odds = event
+        elif kind == "hand_start":
+            self.last_odds = None
         self.outbound.put(event)
 
     def stop(self):
@@ -185,6 +194,13 @@ class WebSink(ui.Sink):
                 "card_count": len(p.hole),
                 "cards": cards_data(p.hole) if (show and p.hole) else None,
             })
+        # The human's best hand right now, recomputed on every event so the
+        # readout tracks the board card by card instead of only on their turn.
+        hero_hand = None
+        if human is not None and human.hole and len(human.hole) + len(g.board) >= 5:
+            rank, five = evaluator.best_hand(list(human.hole) + list(g.board))
+            hero_hand = {"name": evaluator.hand_name(rank), "cat": rank[0],
+                         "cards": cards_data(five)}
         return {
             "hand_no": g.hand_no,
             "street": g.street if live else None,
@@ -199,6 +215,9 @@ class WebSink(ui.Sink):
             "current_bet": g.current_bet if live else 0,
             "starting_stack": g.starting_stack,
             "hero_name": human.name if human else None,
+            "hero_hand": hero_hand,
+            "hero_folded": bool(human.folded) if human else False,
+            "hero_auto": getattr(human, "auto", None) if human else None,
             "seats": seats,
         }
 
@@ -256,19 +275,38 @@ class WebSink(ui.Sink):
                          "hand": evaluator.hand_name(rank)})
         self.send("showdown", players=rows)
 
-    def reveal_all_hands(self, players, board):
-        dealt = [p for p in players if p.hole]
-        rows = []
-        for p in dealt:
-            self.face_up.add(p.name)
-            hand_txt = None
-            if board is not None and len(p.hole) + len(board) >= 5:
-                rank, _ = evaluator.best_hand(list(p.hole) + list(board))
-                hand_txt = evaluator.hand_name(rank)
-            rows.append({"name": p.name, "cards": cards_data(p.hole),
-                         "folded": p.folded, "hand": hand_txt})
-        if rows:
-            self.send("peek", players=rows)
+    def hand_result(self, hand_no, rows, board):
+        out_rows = []
+        for row in rows:
+            p = row["player"]
+            if row["known"]:
+                # Anything the panel shows is public now — leave it face up on
+                # the felt too, until the next deal clears it.
+                self.face_up.add(p.name)
+            out_rows.append({
+                "name": p.name,
+                "is_human": p.is_human,
+                "known": row["known"],
+                "folded": row["folded"],
+                "won": row["won"],
+                "cards": cards_data(row["hole"]) if row["known"] else None,
+                "best5": cards_data(row["best5"]) if row["best5"] else None,
+                "hand": row["hand"],
+                "cat": row["rank"][0] if row["rank"] else None,
+            })
+        self.send("hand_result", hand_no=hand_no, board=cards_data(board),
+                  players=out_rows)
+
+    def hero_odds(self, payload):
+        data = dict(payload)
+        made = payload.get("made")
+        if made:
+            data["made"] = {"cat": made["cat"], "name": made["name"],
+                            "cards": cards_data(made["cards"])}
+        self.send("odds", odds=data)
+
+    def autopilot(self, player, mode):
+        self.send("autopilot", name=player.name, mode=mode)
 
     def announce_pot(self, text):
         self.send("pot_award", text=_strip_ansi(text).strip())
@@ -378,6 +416,7 @@ def build_game(options):
     bb = int(options.get("bb") or 20)
     count = max(1, min(int(options.get("opponents") or 5), len(PERSONALITIES)))
     reveal_all = bool(options.get("show_cards"))
+    show_odds = options.get("odds", True) is not False
     # Table language: what the agents speak ("zh" = Chinese, default English).
     lang = "zh" if str(options.get("language") or "").lower().startswith("zh") else "en"
 
@@ -391,7 +430,7 @@ def build_game(options):
         players.append(LLMPlayer(personality["name"], stack, personality, brain))
 
     game = TexasHoldemGame(players, sb=sb, bb=bb, rng=rng, reveal_all=reveal_all,
-                           language=lang)
+                           language=lang, show_odds=show_odds)
     meta = {
         "note": note,
         "offline": offline,
@@ -399,6 +438,7 @@ def build_game(options):
         "provider": provider,
         "seed": seed,
         "show_cards": reveal_all,
+        "odds": show_odds,
         "language": lang,
         # natural agent voices need the API; the browser falls back to its own
         # speech synthesis when this is False. DeepSeek's endpoint has no TTS,
@@ -595,6 +635,14 @@ class Handler(BaseHTTPRequestHandler):
             if text:
                 session.chat_queue.put(text)
             return self._json({"ok": True})
+        if path == "/api/auto":
+            # Autopilot is armed OUT-OF-BAND, like /api/say: "fold in advance"
+            # only means anything if you can click it while someone else is
+            # still thinking, and the input queue is read only on your turn.
+            session = self._session(query)
+            if session is None or not session.alive:
+                return self._json({"ok": False, "error": "no active game"}, status=409)
+            return self._json(self._arm_auto(session, self._read_json().get("mode")))
         if path == "/api/tts":
             return self._tts(query)
         if path == "/api/quit":
@@ -603,6 +651,38 @@ class Handler(BaseHTTPRequestHandler):
                 session.stop()
             return self._json({"ok": True})
         self.send_error(404)
+
+    # -- autopilot: a move committed to before the turn arrives -------------
+
+    def _arm_auto(self, session, mode):
+        """Arm (or clear, with mode=None) the human's autopilot.
+
+        Two cases. Usually it isn't the human's turn: we set the flag and the
+        engine fires it the moment the turn lands. But if the engine is ALREADY
+        blocked waiting on them, `decide` has passed its autopilot check for
+        this turn — so setting the flag alone would leave the table hanging on
+        a player who thinks they've answered. In that case we also push the
+        matching command to settle the move now; the flag still governs the
+        rest of the hand.
+        """
+        game = session.game
+        human = game.human if game is not None else None
+        if human is None or not hasattr(human, "arm_auto"):
+            return {"ok": False, "error": "no human seat"}
+        if mode not in AUTOPILOT_MODES:
+            mode = None
+        # arm_auto reports through the sink, which is thread-local — this is an
+        # HTTP thread, so lend it the session's sink for the call.
+        ui.set_sink(session.sink)
+        try:
+            human.arm_auto(mode, game.street)
+        finally:
+            ui.set_sink(None)
+        pending = session.pending_await
+        if mode and pending is not None and pending.get("mode") == "action":
+            to_call = (pending.get("legal") or {}).get("to_call") or 0
+            session.inbound.put("f" if (mode == AUTO_FOLD and to_call > 0) else "c")
+        return {"ok": True, "mode": mode}
 
     # -- natural agent voices (OpenAI TTS, proxied so the key stays here) ----
 
@@ -676,6 +756,9 @@ class Handler(BaseHTTPRequestHandler):
             # Catch a (re)connecting tab up to the current state immediately.
             if session.last_state is not None:
                 write({"type": "sync", "state": session.last_state})
+            if session.last_odds is not None:
+                # Without its stale snapshot — the sync above is the newer one.
+                write({"type": "odds", "odds": session.last_odds["odds"]})
             if session.pending_await is not None:
                 write(session.pending_await)
             while session.alive or not session.outbound.empty():

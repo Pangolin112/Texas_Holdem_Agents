@@ -75,7 +75,13 @@ class Sink:
     def show_showdown(self, contenders, results, already_revealed):
         pass
 
-    def reveal_all_hands(self, players, board):
+    def hand_result(self, hand_no, rows, board):
+        pass
+
+    def hero_odds(self, payload):
+        pass
+
+    def autopilot(self, player, mode):
         pass
 
     def announce_pot(self, text):
@@ -282,6 +288,10 @@ def show_help():
     out(dim("   c            check (if free) / call"))
     out(dim("   r <amount>   raise TO <amount> total this street, e.g. 'r 120'"))
     out(dim("   a            all-in"))
+    out(dim("   ff           autopilot: check while it's free, fold to any bet this hand"))
+    out(dim("   cc           autopilot: call everything until the hand ends"))
+    out(dim("   cs           autopilot: call for the rest of this street"))
+    out(dim("   x            autopilot off — hand the controls back"))
     out(dim("   say <text>   chat with the table — they hear you and answer"))
     out(dim("   q            leave the table"))
 
@@ -310,26 +320,88 @@ def show_showdown(contenders, results, already_revealed):
                                evaluator.hand_name(rank)))
 
 
-def reveal_all_hands(players, board=None):
-    """Peek mode: after the hand, lay every dealt seat's hole cards face up —
-    folders included — so you can see what everyone was actually holding."""
+def _pad(text, width):
+    """Pad to `width` by the text's own length — ANSI colors would otherwise
+    count toward it and knock the columns out of line."""
+    return text + " " * max(0, width - len(text))
+
+
+def hand_result(hand_no, rows, board):
+    """The finished hand laid out strongest first: what each seat held, the
+    formula it came to, and the exact five cards that played."""
     sink = get_sink()
     if sink is not None:
-        sink.reveal_all_hands(players, board)
+        sink.hand_result(hand_no, rows, board)
         return
-    dealt = [p for p in players if p.hole]
-    if not dealt:
+    if not rows:
         return
     out()
-    out(bold(" ── everyone's cards (peek) ──"))
-    for p in dealt:
-        status = dim(" folded") if p.folded else ""
-        hand_txt = ""
-        if board is not None and len(p.hole) + len(board) >= 5:
-            rank, _ = evaluator.best_hand(list(p.hole) + list(board))
-            hand_txt = "  " + evaluator.hand_name(rank)
-        out("   %s  %s%s%s" % (name_str(p).ljust(24), cards_str(p.hole),
-                               status, hand_txt))
+    out(bold(" ── hand #%d · final hands, strongest first ──" % hand_no))
+    if board:
+        out(dim("   board: ") + cards_str(board))
+    for i, row in enumerate(rows):
+        p = row["player"]
+        color = C.GREEN if p.is_human else C.CYAN
+        name = _c(color, _pad(p.name, 14))
+        if not row["known"]:
+            out("   %s %s %s" % (dim("  "), name, dim("(mucked — cards not shown)")))
+            continue
+        hole = cards_str(row["hole"]) if row["hole"] else dim("(none)")
+        place = dim("#%d" % (i + 1))
+        line = "   %s %s %s" % (place, name, _pad(hole, 6))
+        if row["hand"]:
+            line += "  %s  %s" % (_pad(row["hand"], 30), cards_str(row["best5"]))
+        if row["won"]:
+            line += "  " + _c(C.YELLOW, "+%d" % row["won"])
+        elif row["folded"]:
+            line += "  " + dim("folded")
+        out(line)
+
+
+def hero_odds(payload):
+    """Your live read: the hand you hold now, every hand you can still get to,
+    and what each is worth."""
+    sink = get_sink()
+    if sink is not None:
+        sink.hero_odds(payload)
+        return
+    if not payload:
+        return
+    out()
+    out(bold(" ── your odds ──") + dim("   vs %d live · %d hands simulated"
+                                       % (payload["opponents"], payload["samples"])))
+    made = payload["made"]
+    if made:
+        out("   now: %s   %s" % (bold(made["name"]), cards_str(made["cards"])))
+    for row in payload["categories"]:
+        if row["make"] < 0.005:
+            continue  # a long shot nobody is drawing to — keep the table short
+        bar = "█" * int(round(row["win"] * 20))
+        out("   %s %s %s %s" % (_pad(row["name"], 16),
+                                dim("make " + _pad("%.0f%%" % (row["make"] * 100), 4)),
+                                _c(C.YELLOW, "win " + _pad("%.0f%%" % (row["win"] * 100), 4)),
+                                _c(C.YELLOW, bar)))
+    verdict = "%.0f%%" % (payload["equity"] * 100)
+    tail = dim("  (win %.0f%% · tie %.0f%%)" % (payload["win"] * 100, payload["tie"] * 100))
+    out("   " + _pad("TOTAL", 16) + _c(C.GREEN, bold("you win " + verdict)) + tail)
+
+
+AUTOPILOT_LABELS = {
+    "auto_fold": "fold this hand (checking while it's free)",
+    "auto_call": "call everything to the end of the hand",
+    "auto_call_street": "call for the rest of this street",
+}
+
+
+def autopilot(player, mode):
+    sink = get_sink()
+    if sink is not None:
+        sink.autopilot(player, mode)
+        return
+    if mode:
+        out(dim("   autopilot on — %s" % AUTOPILOT_LABELS.get(mode, mode)))
+    else:
+        out(dim("   autopilot off — you're back on the controls"))
 
 
 def announce_pot(text):

@@ -45,6 +45,7 @@
     <div class="check-row">
       <label class="check"><input id="opt-offline" type="checkbox"> <span data-i18n="chk_offline">Offline (built-in bots, no API)</span></label>
       <label class="check"><input id="opt-showcards" type="checkbox"> <span data-i18n="chk_peek">Peek mode (reveal cards after each hand)</span></label>
+      <label class="check"><input id="opt-odds" type="checkbox" checked> <span data-i18n="chk_odds">Show my live hand strength and win odds</span></label>
     </div>
     <label class="seed-row"><span data-i18n="lbl_seed">Seed (optional, reproducible deck)</span>
       <input id="opt-seed" type="number" placeholder="random" data-i18n-ph="ph_seed">
@@ -90,10 +91,34 @@
       <!-- flying pot-award banner -->
       <div id="award" class="award hidden"></div>
     </div>
+
+    <!-- finished-hand review: every seat's formula + the five cards that played -->
+    <div id="result" class="result hidden">
+      <div class="result-card">
+        <div class="result-head">
+          <span id="result-title" class="result-title"></span>
+          <button id="result-close" class="ghost small" title="close">✕</button>
+        </div>
+        <div id="result-board" class="result-board"></div>
+        <div id="result-rows" class="result-rows"></div>
+        <div id="result-note" class="result-note dim"></div>
+      </div>
+    </div>
   </main>
 
   <!-- event / chat feed (history board) -->
   <aside id="feed">
+    <!-- live read: your best hand right now + what you can still get to -->
+    <div id="advisor" class="advisor hidden">
+      <div class="advisor-head">
+        <span data-i18n="adv_title">Your hand</span>
+        <span id="adv-equity" class="adv-equity"></span>
+      </div>
+      <div id="adv-made" class="adv-made"></div>
+      <div id="adv-cards" class="adv-cards"></div>
+      <div id="adv-rows" class="adv-rows"></div>
+      <div id="adv-note" class="adv-note"></div>
+    </div>
     <div class="feed-head" data-i18n="feed_head">Table feed</div>
     <div id="feed-list"></div>
   </aside>
@@ -102,6 +127,15 @@
   <!-- hero controls -->
   <section id="hero-bar">
     <div id="hero-hint" class="hero-hint"></div>
+
+    <!-- commit to a move before the turn reaches you; live all hand long -->
+    <div id="autopilot" class="autopilot hidden">
+      <span class="auto-label" data-i18n="auto_label">Autopilot</span>
+      <button class="auto-btn" data-mode="auto_fold" data-i18n="auto_fold">Fold in advance</button>
+      <button class="auto-btn" data-mode="auto_call" data-i18n="auto_call">Call everything</button>
+      <button class="auto-btn" data-mode="auto_call_street" data-i18n="auto_street">Call this street</button>
+      <span id="auto-state" class="auto-state"></span>
+    </div>
 
     <div id="controls" class="controls disabled">
       <div class="action-row">
@@ -159,6 +193,8 @@
       <li data-i18n="help_4"><b>Say</b> — talk to the table any time. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.</li>
       <li data-i18n="help_5"><b>Voice</b> — click 🎤 and speak: "fold", "call", "raise to 200", "all in" play the move; anything else is table talk. 🔊 lets the agents talk back out loud.</li>
       <li data-i18n="help_6"><b>Between hands</b> — buy more chips (added to your tab) or deal the next hand.</li>
+      <li data-i18n="help_7"><b>Autopilot</b> — commit to a move before the turn reaches you: fold in advance, call everything, or call just this street. It clears when the hand ends.</li>
+      <li data-i18n="help_8"><b>Your hand</b> — the panel on the right tracks your best five cards live, and how often each hand you can still make actually wins. When the hand ends you get every seat's cards, strongest first.</li>
     </ul>
     <p class="dim" data-i18n="help_note">A player can bluff about their cards, but if they announce a move ("I fold", "I'm all in") the game forces the move to match.</p>
     <button id="help-close" class="primary" data-i18n="got_it">Got it</button>

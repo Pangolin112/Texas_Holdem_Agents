@@ -4,7 +4,7 @@ import random
 import re
 import threading
 
-from . import evaluator, ui
+from . import evaluator, odds, ui
 from .cards import Deck
 from .players import Action, ALL_IN, CALL, CHECK, FOLD, RAISE
 
@@ -35,7 +35,7 @@ def looks_like_move_question(text):
 
 class TexasHoldemGame:
     def __init__(self, players, sb=10, bb=20, rng=None, interactive=True,
-                 reveal_all=False, language="en"):
+                 reveal_all=False, language="en", show_odds=True):
         self.players = list(players)  # seat order; only players with chips
         self.sb = sb
         self.bb = bb
@@ -43,6 +43,7 @@ class TexasHoldemGame:
         self.interactive = interactive
         self.reveal_all = reveal_all  # peek mode: show every hand once it's over
         self.language = language      # what the agents speak ("en" / "zh")
+        self.show_odds = show_odds    # live equity read for the human seat
         self.starting_stack = players[0].stack if players else 0
         self.button_idx = 0
         self.hand_no = 0
@@ -64,6 +65,10 @@ class TexasHoldemGame:
         self.chat = []     # list of (name, text)
         self.revealed = False
         self.hand_live = False
+        self.shown = set()          # names whose hole cards went public this hand
+        self.hand_winnings = {}     # name -> chips collected this hand
+        self._odds_cache = {}       # (hole, board, live opponents) -> odds payload
+        self._odds_shown = None     # last key handed to the front-end
 
     # ------------------------------------------------------------------ util
 
@@ -96,9 +101,6 @@ class TexasHoldemGame:
             return
         while True:
             self.play_hand()
-            if self.reveal_all:
-                # Cards still hold this hand's deal — reset happens next hand.
-                ui.reveal_all_hands(self.hand_players, self.board)
             self.handle_rebuys()
             if max_hands is not None and self.hand_no >= max_hands:
                 break
@@ -402,6 +404,10 @@ class TexasHoldemGame:
         self.history = []
         # self.chat deliberately persists across hands: conversation continues.
         self.revealed = False
+        self.shown = set()
+        self.hand_winnings = {}
+        self._odds_cache = {}
+        self._odds_shown = None
         self.hand_players = list(self.players)
         for p in self.hand_players:
             p.reset_for_hand()
@@ -438,8 +444,11 @@ class TexasHoldemGame:
         human = self.human
         if human is not None and human in seats:
             ui.out(" your cards: %s" % ui.cards_str(human.hole))
+        self.update_hero_odds()
 
-        # Betting streets.
+        # Betting streets. A round returning False means everyone folded and
+        # the pot has already been awarded; either way the hand is finished, so
+        # every path falls through to the result panel at the bottom.
         if self.betting_round((bb_i + 1) % n):
             for street, count in (("FLOP", 3), ("TURN", 1), ("RIVER", 1)):
                 self.maybe_reveal()
@@ -447,10 +456,12 @@ class TexasHoldemGame:
                 self.board.extend(deck.draw(count))
                 self.new_street()
                 ui.street_banner(street, self.board, self.pot_total())
+                self.update_hero_odds()
                 if not self.betting_round((self.button_idx + 1) % n):
-                    return
-            self.showdown()
-        # betting_round returning False means the pot was already awarded on folds
+                    break
+            else:
+                self.showdown()
+        self.show_hand_result()
 
     def new_street(self):
         for p in self.hand_players:
@@ -465,7 +476,72 @@ class TexasHoldemGame:
         actionable = [p for p in in_hand if not p.all_in]
         if len(in_hand) >= 2 and len(actionable) <= 1:
             self.revealed = True
+            self.shown.update(p.name for p in in_hand)
             ui.reveal_hands(in_hand)
+
+    # ------------------------------------------------------- the human's read
+
+    def update_hero_odds(self):
+        """Recompute and show the human's live read: the hand they hold right
+        now, every hand they can still get to, and what each is worth. Only the
+        human gets this — the agents reason from their own view, and handing
+        them a solver would make them something else entirely."""
+        if not self.show_odds:
+            return
+        human = self.human
+        if human is None or human not in self.hand_players:
+            return
+        if human.folded or len(human.hole) < 2:
+            return
+        live = sum(1 for p in self.hand_players if p is not human and not p.folded)
+        if live < 1:
+            return
+        key = (tuple(str(c) for c in human.hole),
+               tuple(str(c) for c in self.board), live)
+        if key == self._odds_shown:
+            return  # nothing has moved — don't say the same thing twice
+        payload = self._odds_cache.get(key)
+        if payload is None:
+            payload = odds.hand_odds(human.hole, self.board, live, self.rng)
+            if payload is None:
+                return
+            self._odds_cache[key] = payload
+        self._odds_shown = key
+        ui.hero_odds(payload)
+
+    # ------------------------------------------------------ the finished hand
+
+    def show_hand_result(self):
+        """Lay the finished hand out strongest first: what each seat held, the
+        formula it came to, and the exact five cards that played.
+
+        A seat's cards are only in there if they're genuinely public — it went
+        to showdown, it's the human's own hand, or peek mode is on. Mucked
+        hands stay mucked, so this can run after every hand without leaking
+        anything the table didn't already see.
+        """
+        rows = []
+        for p in self.hand_players:
+            if not p.hole:
+                continue
+            known = self.reveal_all or p.is_human or p.name in self.shown
+            rank = five = name = None
+            if known and len(p.hole) + len(self.board) >= 5:
+                rank, five = evaluator.best_hand(p.hole + self.board)
+                name = evaluator.hand_name(rank)
+            rows.append({
+                "player": p,
+                "known": known,
+                "folded": p.folded,
+                "won": self.hand_winnings.get(p.name, 0),
+                "hole": list(p.hole) if known else [],
+                "best5": five,
+                "hand": name,
+                "rank": rank,
+            })
+        # Strongest hand first; anything mucked sinks to the bottom.
+        rows.sort(key=lambda r: (r["known"], r["rank"] or ()), reverse=True)
+        ui.hand_result(self.hand_no, rows, list(self.board))
 
     # ------------------------------------------------------------- betting
 
@@ -501,6 +577,9 @@ class TexasHoldemGame:
             if p in acted and p.bet_street == self.current_bet:
                 continue
 
+            if p.is_human:
+                # Folds since the last look change what you're up against.
+                self.update_hero_odds()
             action, say = p.decide(self.build_view(p))
             reopened, desc = self.apply_action(p, action)
             self.record(p, desc)
@@ -626,6 +705,7 @@ class TexasHoldemGame:
     def award_on_folds(self, winner):
         total = self.pot_total()
         winner.stack += total
+        self.hand_winnings[winner.name] = self.hand_winnings.get(winner.name, 0) + total
         ui.out("")
         ui.announce_pot("%s wins the pot of %d — everyone else folded." % (winner.name, total))
         self.memory.append("Hand %d: %s won %d without a showdown (everyone folded)."
@@ -637,6 +717,7 @@ class TexasHoldemGame:
     def showdown(self):
         contenders = [p for p in self.hand_players if p.in_hand]
         results = {p: evaluator.best_hand(p.hole + self.board) for p in contenders}
+        self.shown.update(p.name for p in contenders)
         ui.show_showdown(contenders, results, self.revealed)
 
         summaries = self.award_pots(contenders, results)
@@ -647,6 +728,13 @@ class TexasHoldemGame:
             self.memory = self.memory[-8:]
             # A showdown occasionally gets a word — kept rare for speed.
             self.react_to_event(None, "Showdown result: %s" % summaries[0], 0.2)
+
+    def credit(self, player, amount):
+        """Book chips a seat collected this hand, so the result panel can show
+        who actually got paid without re-reading the announcements."""
+        if amount:
+            self.hand_winnings[player.name] = (
+                self.hand_winnings.get(player.name, 0) + amount)
 
     def award_pots(self, contenders, results):
         """Split the money into main/side pots and pay the winners.
@@ -672,16 +760,17 @@ class TexasHoldemGame:
             if len(eligible) == 1:
                 # Nobody could match this slice — return the uncalled chips.
                 eligible[0].stack += amount
+                self.credit(eligible[0], amount)
                 summaries.append("%s takes back %d uncalled chips." % (eligible[0].name, amount))
                 continue
             best = max(results[p][0] for p in eligible)
             winners = [p for p in eligible if results[p][0] == best]
             share = amount // len(winners)
             remainder = amount - share * len(winners)
-            for w in winners:
-                w.stack += share
-            for i in range(remainder):
-                winners[i].stack += 1
+            for w_i, w in enumerate(winners):
+                got = share + (1 if w_i < remainder else 0)  # odd chips off the top
+                w.stack += got
+                self.credit(w, got)
             name = evaluator.hand_name(best)
             if len(winners) == 1:
                 summaries.append("%s wins the %s of %d with %s."

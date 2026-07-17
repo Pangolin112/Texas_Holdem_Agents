@@ -2,13 +2,14 @@
 
 import random
 
-from holdem import evaluator, ui
+from holdem import evaluator, odds, ui
 from holdem.brains import (PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain,
                            PolicyBrain, spoken_action, _softmax)
 from holdem.cards import Card, Deck, RANK_VALUES
 from holdem.game import TexasHoldemGame, looks_like_move_question
-from holdem.players import (Action, LLMPlayer, Player,
-                            ALL_IN, CALL, CHECK, FOLD, RAISE)
+from holdem.players import (Action, HumanPlayer, LLMPlayer, Player,
+                            ALL_IN, AUTO_CALL, AUTO_CALL_STREET, AUTO_FOLD,
+                            CALL, CHECK, FOLD, RAISE)
 
 ui.QUIET = True
 
@@ -56,6 +57,34 @@ def test_evaluator():
     ok(len(best_five) == 5, "best_hand returns exactly five cards")
     ok(evaluator.hand_name((6, 14, 13)) == "a Full House, Aces over Kings", "hand naming")
     ok(evaluator.hand_name((1, 6)) == "a Pair of Sixes", "six pluralizes as sixes")
+
+
+def test_fast_ranker_agrees_with_brute_force():
+    """rank_cards reads the hand off rank/suit counts instead of trying all 21
+    combinations. It's only allowed to exist because it agrees exactly."""
+    rng = random.Random(99)
+    deck = [Card(v, s) for v in RANK_VALUES.values() for s in "shdc"]
+    for _ in range(4000):
+        hand = rng.sample(deck, rng.choice([5, 6, 7]))
+        fast = evaluator.rank_cards(hand)
+        slow, _ = evaluator.best_hand(hand)
+        assert fast == slow, ("%s: fast %s != brute force %s"
+                              % (" ".join(str(c) for c in hand), fast, slow))
+    ok(True, "4000 random 5/6/7-card deals: fast ranker matches brute force exactly")
+
+    # The shapes worth naming, including the ones a counting evaluator trips on.
+    ok(evaluator.rank_cards(cards("As Ks Qs Js Ts 2c 3d")) == (8, 14),
+       "royal flush found among seven cards")
+    ok(evaluator.rank_cards(cards("Ah 5h 4h 3h 2h Kd")) == (8, 5),
+       "steel wheel: the ace drops to the bottom of a straight flush")
+    ok(evaluator.rank_cards(cards("9c 9d 9h Ks Kd Kh 2c")) == (6, 13, 9),
+       "two trips make a full house off the higher one")
+    ok(evaluator.rank_cards(cards("Ks Kd 9h 9s 5c 5d 2c")) == (2, 13, 9, 5),
+       "three pairs play the top two plus the best kicker")
+    ok(evaluator.rank_cards(cards("As 8s 7s 5s 3s 2s Kd")) == (5, 14, 8, 7, 5, 3),
+       "six of a suit plays the five highest")
+    ok(evaluator.rank_cards(cards("9c 8d 7h 6s 5c 4d 2h")) == (4, 9),
+       "the highest straight wins out of a six-card run")
 
 
 # --------------------------------------------------------------- scripted players
@@ -699,8 +728,275 @@ def test_personality_differentiates():
        "on an identical hand, raise frequency tracks aggression: Mike > Sarah > Emma")
 
 
+# --------------------------------------------------------------- odds
+
+def test_odds_match_known_equities():
+    """Pinned to published heads-up equities — if the simulator drifts, these
+    move well outside sampling noise."""
+    r = odds.hand_odds(cards("As Ah"), [], 1, random.Random(4), time_budget=0.5)
+    ok(abs(r["equity"] - 0.853) < 0.02, "aces run ~85% against one random hand")
+    r = odds.hand_odds(cards("As Ks"), [], 1, random.Random(5), time_budget=0.5)
+    ok(abs(r["equity"] - 0.670) < 0.02, "suited AK runs ~67% against one random hand")
+    r = odds.hand_odds(cards("7d 2c"), [], 1, random.Random(6), time_budget=0.5)
+    ok(abs(r["equity"] - 0.346) < 0.02, "the worst hand in poker runs ~35%")
+    r = odds.hand_odds(cards("As Ah"), [], 5, random.Random(7), time_budget=0.5)
+    ok(abs(r["equity"] - 0.49) < 0.03, "aces drop to ~49% against five random hands")
+
+
+def test_odds_decompose_into_categories():
+    r = odds.hand_odds(cards("As Ks"), cards("Qs 7s 2h"), 2, random.Random(9),
+                       time_budget=0.6)
+    ok(abs(sum(c["make"] for c in r["categories"]) - 1.0) < 1e-9,
+       "every runout lands in exactly one category")
+    ok(abs(sum(c["win"] for c in r["categories"]) - r["equity"]) < 1e-9,
+       "the per-category win column sums to total equity — that's the point of it")
+    ok(abs(r["win"] + r["tie"] + r["lose"] - 1.0) < 1e-9,
+       "win/tie/lose partition the runouts")
+    ok(all(c["win"] <= c["make"] + 1e-9 for c in r["categories"]),
+       "you can't win with a hand more often than you make it")
+
+    # A flopped flush draw gets there 1 - (38/47)(37/46) = 35.0% of the time.
+    made = sum(c["make"] for c in r["categories"]
+               if c["cat"] in (evaluator.FLUSH, evaluator.STRAIGHT_FLUSH))
+    ok(abs(made - 0.350) < 0.02, "a flopped flush draw completes ~35% by the river")
+
+
+def test_odds_on_a_complete_board():
+    r = odds.hand_odds(cards("As Ks"), cards("Qs 7s 2s Td 3h"), 1,
+                       random.Random(2), time_budget=0.2)
+    ok(r["final"] is True, "no cards to come — flagged as final")
+    ok(len(r["categories"]) == 1, "hero's own category is already decided")
+    ok(r["made"]["name"] == "a Flush, Ace high", "the made hand comes back named")
+    ok(len(r["made"]["cards"]) == 5, "...with the five cards that play")
+    ok(r["equity"] > 0.99, "the nut flush on a board nobody can beat is a lock")
+
+
+def test_odds_declines_impossible_spots():
+    ok(odds.hand_odds(cards("As"), [], 1, random.Random(1)) is None,
+       "a single hole card isn't a hand to price")
+    ok(odds.hand_odds(cards("As Ks"), cards("Qs 7s 2h"), 30, random.Random(1)) is None,
+       "more opponents than the deck can deal for -> no answer, not a crash")
+
+
+# --------------------------------------------------------------- autopilot
+
+def test_autopilot_fold_waits_for_a_bet():
+    hero = HumanPlayer("You", 1000)
+    hero.arm_auto(AUTO_FOLD, "FLOP")
+    ok(hero.auto_action({"street": "FLOP", "to_call": 0}).kind == CHECK,
+       "pre-fold takes the free card instead of folding for nothing")
+    ok(hero.auto_action({"street": "FLOP", "to_call": 50}).kind == FOLD,
+       "pre-fold folds the moment it actually costs something")
+    ok(hero.auto == AUTO_FOLD, "and stays armed across streets")
+
+
+def test_autopilot_call_modes():
+    hero = HumanPlayer("You", 1000)
+    hero.arm_auto(AUTO_CALL, "PREFLOP")
+    ok(hero.auto_action({"street": "RIVER", "to_call": 900}).kind == CALL,
+       "call-everything calls any amount, any street")
+    ok(hero.auto_action({"street": "RIVER", "to_call": 0}).kind == CHECK,
+       "...and checks when there's nothing to call")
+
+    hero.arm_auto(AUTO_CALL_STREET, "FLOP")
+    ok(hero.auto_action({"street": "FLOP", "to_call": 80}).kind == CALL,
+       "call-this-street calls on the street it was armed for")
+    ok(hero.auto_action({"street": "TURN", "to_call": 80}) is None,
+       "...and hands the controls back when that street ends")
+    ok(hero.auto is None, "expiring disarms it rather than leaving it half-on")
+
+
+def test_autopilot_answers_without_prompting():
+    # ui.QUIET makes safe_input raise, and show_table would blow up on this
+    # stub view — so reaching the prompt at all fails the test loudly.
+    hero = HumanPlayer("You", 1000)
+    hero.arm_auto(AUTO_CALL, "FLOP")
+    action, say = hero.decide({"street": "FLOP", "to_call": 60})
+    ok(action.kind == CALL and say is None,
+       "an armed seat answers the engine without ever asking the human")
+
+
+def test_autopilot_is_per_hand_and_validated():
+    hero = HumanPlayer("You", 1000)
+    hero.arm_auto(AUTO_CALL, "FLOP")
+    hero.reset_for_hand()
+    ok(hero.auto is None, "a commitment only covers the hand it was made in")
+    hero.arm_auto("wire the pot to me")
+    ok(hero.auto is None, "an unknown mode is refused, not armed")
+    hero.arm_auto(AUTO_FOLD, "FLOP")
+    hero.arm_auto(None)
+    ok(hero.auto is None, "and it can be handed back")
+    ok(hero.auto_action({"street": "FLOP", "to_call": 999}) is None,
+       "a disarmed seat is asked like anyone else")
+
+
+# --------------------------------------------------------------- hand result
+
+class RecordingSink(ui.Sink):
+    def __init__(self):
+        self.results = []
+        self.odds = []
+        self.autos = []
+
+    def hand_result(self, hand_no, rows, board):
+        self.results.append({"hand_no": hand_no, "rows": rows, "board": board})
+
+    def hero_odds(self, payload):
+        self.odds.append(payload)
+
+    def autopilot(self, player, mode):
+        self.autos.append((player.name, mode))
+
+
+def result_game(reveal_all=False):
+    """A hand frozen at the end: hero holds aces, A folded, B showed down."""
+    hero = HumanPlayer("You", 1000)
+    a, b = Player("A", 1000), Player("B", 1000)
+    game = make_game([hero, a, b], reveal_all=reveal_all)
+    game.hand_players = [hero, a, b]
+    game.hand_no = 3
+    game.board = cards("2h 5c 7s 9d Jc")
+    hero.hole, a.hole, b.hole = cards("As Ad"), cards("Ks Kd"), cards("Qs Qd")
+    a.folded = True
+    game.shown = {"B"}                 # B's cards went face up at showdown
+    game.hand_winnings = {"B": 300}
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        game.show_hand_result()
+    finally:
+        ui.set_sink(None)
+    return sink.results[0]
+
+
+def test_hand_result_ranks_every_seat_by_strength():
+    res = result_game()
+    rows = res["rows"]
+    ok(res["hand_no"] == 3 and len(res["board"]) == 5, "the finished board comes with it")
+    ok(len(rows) == 3, "every seat that was dealt in gets a row, folded or not")
+    ok([r["player"].name for r in rows] == ["You", "B", "A"],
+       "strongest hand first, and anything mucked sinks to the bottom")
+    ok(rows[0]["hand"] == "a Pair of Aces", "the formula each seat arrived at")
+    ok(len(rows[0]["best5"]) == 5, "and the exact five cards that played")
+    ok(rows[0]["rank"] > rows[1]["rank"], "rows are ordered by real hand rank")
+    ok(rows[1]["won"] == 300 and rows[0]["won"] == 0, "chips collected are booked per seat")
+
+
+def test_hand_result_keeps_mucked_cards_secret():
+    rows = result_game()["rows"]
+    folded = next(r for r in rows if r["player"].name == "A")
+    ok(not folded["known"], "a seat that folded without showing stays hidden")
+    ok(folded["hole"] == [] and folded["best5"] is None and folded["hand"] is None,
+       "nothing about a mucked hand leaks into the panel")
+    ok(folded["folded"], "though the panel still shows they were in the hand")
+
+    peeked = next(r for r in result_game(reveal_all=True)["rows"]
+                  if r["player"].name == "A")
+    ok(peeked["known"] and peeked["hand"] == "a Pair of Kings",
+       "peek mode is what opens folded hands up")
+    ok(peeked["folded"], "a peeked hand is still marked as folded")
+
+
+def test_hand_result_survives_a_preflop_fold_around():
+    hero = HumanPlayer("You", 1000)
+    other = Player("A", 1000)
+    game = make_game([hero, other])
+    game.hand_players = [hero, other]
+    game.hand_no = 1
+    game.board = []                    # nobody saw a flop
+    hero.hole, other.hole = cards("As Ad"), cards("Ks Kd")
+    game.hand_winnings = {"You": 30}
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        game.show_hand_result()
+    finally:
+        ui.set_sink(None)
+    rows = sink.results[0]["rows"]
+    hero_row = next(r for r in rows if r["player"].is_human)
+    ok(hero_row["known"] and hero_row["hole"], "you always get to see your own cards")
+    ok(hero_row["hand"] is None and hero_row["best5"] is None,
+       "with no board there's no five-card hand to name — and no crash")
+
+
+def test_hero_odds_only_run_for_a_live_human():
+    hero = HumanPlayer("You", 1000)
+    a, b = Player("A", 1000), Player("B", 1000)
+    game = make_game([hero, a, b])
+    game.hand_players = [hero, a, b]
+    game.board = cards("2h 5c 7s")
+    hero.hole, a.hole, b.hole = cards("As Ad"), cards("Ks Kd"), cards("Qs Qd")
+
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        game.update_hero_odds()
+        ok(len(sink.odds) == 1, "the human gets a read on their spot")
+        ok(abs(sink.odds[0]["equity"] - 1.0) < 0.5, "...and it's a real number")
+        ok(sink.odds[0]["opponents"] == 2, "priced against the seats still in the hand")
+
+        game.update_hero_odds()
+        ok(len(sink.odds) == 1, "nothing has moved — the same read isn't sent twice")
+
+        a.folded = True
+        game.update_hero_odds()
+        ok(len(sink.odds) == 2 and sink.odds[1]["opponents"] == 1,
+           "a fold changes what you're up against, so the read is refreshed")
+
+        hero.folded = True
+        game.update_hero_odds()
+        ok(len(sink.odds) == 2, "a folded human isn't handed odds on a dead hand")
+    finally:
+        ui.set_sink(None)
+
+    # Switched off, nothing is computed at all.
+    quiet = make_game([hero, a, b], show_odds=False)
+    quiet.hand_players = [hero, a, b]
+    quiet.board = cards("2h 5c 7s")
+    hero.folded = False
+    sink2 = RecordingSink()
+    ui.set_sink(sink2)
+    try:
+        quiet.update_hero_odds()
+    finally:
+        ui.set_sink(None)
+    ok(not sink2.odds, "--no-odds means the simulator never runs")
+
+
+def test_hand_winnings_track_every_payout():
+    players = [Player("P0", 0), Player("P1", 0), Player("P2", 0)]
+    game = make_game(players)
+    game.hand_players = players
+    game.board = cards("2h 5c 7s 9d Jc")
+    for pl, hole, committed in zip(players, ["As Ad", "Ks Kd", ""], [100, 100, 40]):
+        pl.hole = cards(hole) if hole else []
+        pl.committed = committed
+    players[2].folded = True
+    contenders = [pl for pl in players if not pl.folded]
+    results = {pl: evaluator.best_hand(pl.hole + game.board) for pl in contenders}
+    game.award_pots(contenders, results)
+    ok(game.hand_winnings == {"P0": 240}, "the winner's collection is booked, and only theirs")
+    ok(players[0].stack == 240, "and it matches the chips actually paid out")
+
+    # Odd chips are booked to whoever they were paid to, not rounded away.
+    split = [Player("A", 0), Player("B", 0)]
+    game2 = make_game(split)
+    game2.hand_players = split
+    game2.board = cards("2h 5c 7s 9d Kh")
+    for pl, hole in zip(split, ["Ah Kd", "As Kc"]):
+        pl.hole = cards(hole)
+        pl.committed = 101
+    res2 = {pl: evaluator.best_hand(pl.hole + game2.board) for pl in split}
+    game2.award_pots(split, res2)
+    ok(sum(game2.hand_winnings.values()) == 202, "a split pot is booked in full")
+    ok(game2.hand_winnings["A"] == split[0].stack
+       and game2.hand_winnings["B"] == split[1].stack,
+       "each seat's booked total matches its own stack")
+
+
 if __name__ == "__main__":
     test_evaluator()
+    test_fast_ranker_agrees_with_brute_force()
     test_fold_around()
     test_raise_call_and_min_raise()
     test_min_raise_clamping()
@@ -733,4 +1029,17 @@ if __name__ == "__main__":
     test_heuristic_actions_always_legal()
     test_dominated_action_pruned()
     test_personality_differentiates()
+    test_odds_match_known_equities()
+    test_odds_decompose_into_categories()
+    test_odds_on_a_complete_board()
+    test_odds_declines_impossible_spots()
+    test_autopilot_fold_waits_for_a_bet()
+    test_autopilot_call_modes()
+    test_autopilot_answers_without_prompting()
+    test_autopilot_is_per_hand_and_validated()
+    test_hand_result_ranks_every_seat_by_strength()
+    test_hand_result_keeps_mucked_cards_secret()
+    test_hand_result_survives_a_preflop_fold_around()
+    test_hero_odds_only_run_for_a_live_human()
+    test_hand_winnings_track_every_payout()
     print("all good: %d checks passed" % CHECKS["passed"])

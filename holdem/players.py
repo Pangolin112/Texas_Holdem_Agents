@@ -30,6 +30,15 @@ CALL: Final = "call"
 RAISE: Final = "raise"
 ALL_IN: Final = "all_in"
 
+# Autopilot: a decision the human commits to BEFORE being asked, so the table
+# doesn't wait on them. Armed at any moment (a front-end may arm it while
+# another seat is still thinking — that's the whole point of AUTO_FOLD), it
+# fires the instant the turn lands and is disarmed by the events below.
+AUTO_FOLD: Final = "auto_fold"                # give up on this hand
+AUTO_CALL: Final = "auto_call"                # call whatever comes, all hand
+AUTO_CALL_STREET: Final = "auto_call_street"  # ...but only this street
+AUTOPILOT_MODES: Final = (AUTO_FOLD, AUTO_CALL, AUTO_CALL_STREET)
+
 
 class Action:
     __slots__ = ("kind", "amount")
@@ -101,7 +110,44 @@ class Player:
 class HumanPlayer(Player):
     is_human: bool = True
 
+    def __init__(self, name: str, stack: int) -> None:
+        super().__init__(name, stack)
+        self.auto: Optional[str] = None         # armed autopilot mode, if any
+        self.auto_street: Optional[str] = None  # street AUTO_CALL_STREET was armed on
+
+    def reset_for_hand(self) -> None:
+        super().reset_for_hand()
+        # A commitment only ever covers the hand it was made in.
+        self.auto = None
+        self.auto_street = None
+
+    def arm_auto(self, mode: Optional[str], street: Optional[str] = None) -> None:
+        """Commit to a move in advance (or pass None to take back the controls).
+        Called from the game thread and, in the web app, from the HTTP thread
+        while the table is mid-hand — it only assigns, so that's safe."""
+        if mode not in AUTOPILOT_MODES:
+            mode = None
+        self.auto = mode
+        self.auto_street = street if mode == AUTO_CALL_STREET else None
+        ui.autopilot(self, mode)
+
+    def auto_action(self, view: PlayerView) -> Optional[Action]:
+        """The move the autopilot commits to here, or None to ask the human."""
+        if self.auto is None:
+            return None
+        if self.auto == AUTO_CALL_STREET and view["street"] != self.auto_street:
+            self.arm_auto(None)  # the street it was armed for is over
+            return None
+        if self.auto == AUTO_FOLD:
+            # Folding when checking is free just throws away a free card, so
+            # hold on until someone actually bets — same rule as typing 'f'.
+            return Action(CHECK) if view["to_call"] <= 0 else Action(FOLD)
+        return Action(CALL if view["to_call"] > 0 else CHECK)
+
     def decide(self, view: PlayerView) -> tuple[Action, Optional[str]]:
+        action = self.auto_action(view)
+        if action is not None:
+            return action, None
         ui.show_table(view)
         while True:
             raw = ui.safe_input(" your move (h for help) > ").strip()
@@ -110,6 +156,14 @@ class HumanPlayer(Player):
             if low in ("h", "help", "?"):
                 ui.show_help()
                 continue
+            if low in ("ff", "cc", "cs", "x"):
+                mode = {"ff": AUTO_FOLD, "cc": AUTO_CALL,
+                        "cs": AUTO_CALL_STREET, "x": None}[low]
+                self.arm_auto(mode, view["street"])
+                if mode is None:
+                    continue
+                # Armed at your own turn, it takes effect on this very move.
+                return self.auto_action(view), None
             if low.startswith("say"):
                 text = raw[3:].strip()
                 if text:

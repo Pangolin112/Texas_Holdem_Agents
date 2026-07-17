@@ -46,7 +46,8 @@ Options:
 | `--model NAME` | preferred OpenAI model (default `gpt-5.2`, or `$OPENAI_MODEL`; auto-falls back if unavailable) |
 | `--offline` | no API — opponents use built-in bot logic |
 | `--seed N` | reproducible shuffles |
-| `--show-cards` | peek mode: reveal every opponent's hole cards after each hand |
+| `--show-cards` | peek mode: also open up **folded** players' cards in the end-of-hand review |
+| `--no-odds` | don't show your live hand strength and win odds |
 | `--lang zh` | the agents speak Chinese — table talk, reactions, explanations (default `en`) |
 
 ## Play — web (2D table)
@@ -61,11 +62,15 @@ npm) hosts a browser front-end with a green-felt 2D table: seats around an
 oval, animated dealt cards, community board and pot in the middle, the dealer
 button, per-seat stacks/bets and a "thinking…" glow while an AI decides, and
 speech bubbles when the table talks. A **setup screen** lets you pick your
-name, the number of opponents, stacks, blinds, model, and offline/peek modes —
-every option the terminal has. Click **Fold / Check-Call / Raise** (with a
-slider and ½·¾·pot shortcuts) **/ All-in**, type in the **Say** box to chat,
+name, the number of opponents, stacks, blinds, model, and offline/peek/odds
+modes — every option the terminal has. Click **Fold / Check-Call / Raise** (with
+a slider and ½·¾·pot shortcuts) **/ All-in**, type in the **Say** box to chat,
 and between hands **buy chips** or deal the next one. A live **table feed** on
-the right logs every action, showdown and remark.
+the right logs every action, showdown and remark, and a panel above it tracks
+[your hand and win odds](#your-live-hand--win-odds) in real time. An
+[autopilot](#autopilot--commit-before-your-turn) row lets you commit to a move
+before the turn even reaches you, and when the hand ends you get the
+[review](#end-of-hand-review) of every seat's cards.
 
 Under the hood the real `holdem` engine runs in a background thread; each game
 event is streamed to the browser over Server-Sent Events, and your clicks are
@@ -129,6 +134,8 @@ On your turn:
 | `c` (or Enter when free) | check / call |
 | `r 120` | raise **to** 120 total for this street |
 | `a` | all-in |
+| `ff` / `cc` / `cs` | autopilot: fold this hand / call everything / call this street |
+| `x` | autopilot off — hand the controls back |
 | `say nice try, robot` | chat with the table — the AIs hear you and answer back |
 | `h` | help, `q` — leave the table |
 
@@ -163,13 +170,78 @@ character — offline bots go on instinct instead. Bought chips come from the
 house and go on your tab just like a rebuy, so your net (stack − debt) is
 unchanged — it's more ammunition on the table, not profit.
 
-## Peek mode
+## Reading the hand
 
-Run with `--show-cards` and, once a hand is over, the game lays **every dealt
-seat's hole cards face up** — folders included — alongside the hand each would
-have made. It's a study/debug view: see what the AIs were actually holding,
-whether a bluff was real, and which folds were mistakes. (Nothing is leaked
-mid-hand; the reveal happens only after the hand finishes.)
+### Your live hand + win odds
+
+While you're in a hand, the game keeps a running read on your seat: **the best
+five cards you hold right now**, updated the moment a card lands — and, for
+every hand you could still *get to*, how often you make it and how often that
+actually wins:
+
+```
+ ── your odds ──   vs 1 live · 15104 hands simulated
+   now: a Pair of Nines   9♥ 9♠ K♦ 7♣ 4♠
+   Flush            make 35%   win 34%   ███████
+   Two Pair         make  7%   win  5%   █
+   Pair             make 33%   win 15%   ███
+   High Card        make 23%   win  3%
+   TOTAL            you win 57%   (win 55% · tie 4%)
+```
+
+Read it as a decomposition rather than nine unrelated numbers: **the win column
+sums to the total**. When you're drawing at several things at once — a flush,
+trips, a straight — this is what tells you which of them is actually carrying
+your equity and where you really stand.
+
+The numbers come from a Monte-Carlo simulation (`holdem/odds.py`): every rollout
+deals the missing board and each live opponent's hole cards from the genuinely
+unknown cards, ranks everyone, and books the result under the category you ended
+with. Ties are booked as fractional wins (1/N for an N-way chop), so the total is
+the equity you'd actually realize. It's bounded by wall-clock rather than a fixed
+sample count — a few thousand rollouts per spot, accurate to well under a percent.
+Only *your* seat gets this; the agents reason from their own view, and handing
+them a solver would make them something else entirely. Turn it off with
+`--no-odds` (or the setup checkbox).
+
+### Autopilot — commit before your turn
+
+Decide early and stop waiting on the table:
+
+| | |
+|---|---|
+| **Fold in advance** (预先弃牌) | you're done with this hand — it checks while checking is free, and folds the moment someone bets |
+| **Call everything** (默认全跟) | call whatever comes, all hand |
+| **Call this street** (跟当前轮次) | call for the rest of this street only, then the controls come back |
+
+In the browser these are buttons you can hit **while someone else is still
+thinking** — the point of folding in advance. The commitment covers the hand it
+was made in and clears on the next deal; click the armed button again to take
+the controls back.
+
+### End-of-hand review
+
+When a hand ends, every seat is laid out **strongest first** with the formula it
+arrived at and the exact five cards that played (the ones out of their own hand
+ringed in gold):
+
+```
+ ── hand #2 · final hands, strongest first ──
+   board: 9♠ 7♦ 3♣ 4♦ 8♦
+   #1 Linda    9♥ 10♥  a Pair of Nines     9♥ 10♥ 9♠ 7♦ 8♦   +2091
+   #2 Sarah    9♣ 6♣   a Pair of Nines     9♣ 6♣ 9♠ 7♦ 8♦
+   #3 You      2♣ 6♥   High Card, Nine     6♥ 9♠ 7♦ 4♦ 8♦    folded
+   Ray         (mucked — cards not shown)
+```
+
+Card strength across the table reads at a glance — including whether the hand
+you folded was the best one. Your own cards are always there, and so is anyone
+who went to showdown. **Mucked hands stay mucked**: a seat that folded without
+showing keeps its cards, so this runs after every hand without leaking anything
+the table didn't already see. Run with `--show-cards` (**peek mode**, or the
+setup checkbox) to open the folders up too — a study view for seeing what the
+AIs were actually holding and whether a bluff was real. Nothing is ever revealed
+mid-hand.
 
 ## The opponents
 
@@ -218,9 +290,10 @@ One engine, swappable front-ends:
 ```
 holdem/                shared core — no front-end code
   cards.py             deck + cards
-  evaluator.py         best 5-card hand, side-pot ranking
+  evaluator.py         best 5-card hand, side-pot ranking, fast 7-card ranker
+  odds.py              Monte-Carlo equity + per-category chances (your seat only)
   brains.py            LLM + heuristic decision-making (the personalities)
-  players.py           human + AI seats
+  players.py           human + AI seats (incl. the autopilot commitments)
   game.py              the No-Limit engine (betting, pots, showdowns, chat)
   ui.py                presentation layer + a pluggable **Sink**
 
@@ -250,3 +323,18 @@ python test_game.py
 
 Covers the hand evaluator, betting engine, side-pot math, and runs hundreds
 of simulated hands checking that chips are never created or destroyed.
+
+Two things worth knowing about, since they're easy to get subtly and silently
+wrong:
+
+- **The fast ranker.** `evaluator.rank_cards` reads a hand off rank/suit counts
+  instead of trying all 21 five-card combinations (~19× faster, which is what
+  makes the odds simulation affordable). It's only allowed to exist because the
+  suite checks it against the obvious brute-force version over thousands of
+  random 5/6/7-card deals — plus the shapes a counting evaluator trips on: the
+  steel wheel, two trips making a full house, three pairs, six of a suit.
+- **The odds.** Pinned to published equities (aces 85.3% heads-up, suited AK
+  67.0%, 7-2 offsuit 34.6%) and to closed-form combinatorics (a flopped flush
+  draw completes 1 − (38/47)(37/46) = 35.0%), with the invariants checked too:
+  make% covers every runout exactly once, and the per-category win column sums
+  to total equity.

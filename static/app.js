@@ -22,6 +22,7 @@ const I18N = {
     lbl_model: "Model",
     chk_offline: "Offline (built-in bots, no API)",
     chk_peek: "Peek mode (reveal cards after each hand)",
+    chk_odds: "Show my live hand strength and win odds",
     lbl_seed: "Seed (optional, reproducible deck)", ph_seed: "random",
     deal_in: "Deal me in",
     shuffling: "Shuffling…",
@@ -60,8 +61,33 @@ const I18N = {
     help_4: "<b>Say</b> — talk to the table at any moment, even while someone is thinking; they hear you right away. Name someone and they answer; ask <i>why</i> they made a move and they'll explain their real reasoning.",
     help_5: "<b>Voice</b> — click 🎤 and speak: \"fold\", \"call\", \"raise to 200\", \"all in\" play the move; anything else is table talk. With 🔊 on, the agents answer out loud in their own natural voices.",
     help_6: "<b>Between hands</b> — buy more chips (added to your tab) or deal the next hand.",
+    help_7: "<b>Autopilot</b> — commit to a move before the turn reaches you: fold in advance, call everything, or call just this street. It clears when the hand ends.",
+    help_8: "<b>Your hand</b> — the panel on the right tracks your best five cards live, and how often each hand you can still make actually wins. When the hand ends you get every seat's cards, strongest first.",
     help_note: "A player can bluff about their cards, but if they announce a move (\"I fold\", \"I'm all in\") the game forces the move to match.",
     got_it: "Got it",
+    /* autopilot */
+    auto_label: "Autopilot",
+    auto_fold: "Fold in advance",
+    auto_call: "Call everything",
+    auto_street: "Call this street",
+    auto_on_auto_fold: "armed — folding to any bet this hand (click again to cancel)",
+    auto_on_auto_call: "armed — calling everything this hand (click again to cancel)",
+    auto_on_auto_call_street: "armed — calling for the rest of this street (click again to cancel)",
+    /* live hand + odds panel */
+    adv_title: "Your hand",
+    adv_preflop: "Preflop — no board yet",
+    adv_make: "make",
+    adv_win: "win",
+    adv_total: "you win",
+    adv_samples: "{n} hands simulated vs {k} live",
+    adv_final: "{n} hands simulated vs {k} live · board complete",
+    adv_folded: "You're out of this hand.",
+    /* finished-hand review */
+    res_title: "Hand #{n} — final hands, strongest first",
+    res_mucked: "mucked — not shown",
+    res_folded: "folded",
+    res_note: "Mucked hands stay secret. Tick “Peek mode” at setup to see folded players' cards too.",
+    res_preflop: "no board — the hand ended before the flop",
   },
   zh: {
     page_title: "德州扑克 — 你 vs 机器",
@@ -72,6 +98,7 @@ const I18N = {
     lbl_model: "模型",
     chk_offline: "离线模式（内置机器人，不调用 API）",
     chk_peek: "偷看模式（每手结束后亮出所有底牌）",
+    chk_odds: "显示我的实时牌力与胜率",
     lbl_seed: "随机种子（可选，可复现的牌序）", ph_seed: "随机",
     deal_in: "发牌，我上桌",
     shuffling: "洗牌中…",
@@ -110,10 +137,44 @@ const I18N = {
     help_4: "<b>说话</b> —— 任何时刻都能和牌桌聊天，哪怕有人正在思考，他们也立刻听得见。点名谁，谁就会回答；问他们<i>为什么</i>那么打，他们会解释真实的思路。",
     help_5: "<b>语音</b> —— 点 🎤 开口说：“弃牌”“跟注”“加注到 200”“全下”会直接出牌；说别的就是牌桌聊天。开着 🔊，对手们会用各自自然的嗓音开口回话。",
     help_6: "<b>两手之间</b> —— 买更多筹码（记在账上）或发下一手。",
+    help_7: "<b>自动</b> —— 还没轮到你，就可以先把这一手的决定定下来：预先弃牌、默认全跟、或者只跟当前这一轮。这手打完就自动解除。",
+    help_8: "<b>我的牌</b> —— 右边的面板实时显示你当前的最大牌型和用到的五张牌，并算出你还能凹成的每种牌型各有多大概率、各能赢多少。这手结束后，会按牌力从强到弱列出每家的牌。",
     help_note: "玩家可以在牌上虚张声势，但只要嘴上宣布了动作（“我弃了”“我全下”），游戏会强制动作和话一致。",
     got_it: "明白",
+    /* autopilot */
+    auto_label: "自动",
+    auto_fold: "预先弃牌",
+    auto_call: "默认全跟",
+    auto_street: "跟当前轮次",
+    auto_on_auto_fold: "已预约：本手只要有人下注就弃牌（再点一次取消）",
+    auto_on_auto_call: "已预约：本手一路跟到底（再点一次取消）",
+    auto_on_auto_call_street: "已预约：本轮剩下的下注都跟（再点一次取消）",
+    /* live hand + odds panel */
+    adv_title: "我的牌",
+    adv_preflop: "翻牌前——公共牌还没发",
+    adv_make: "成牌",
+    adv_win: "赢率",
+    adv_total: "你的胜率",
+    adv_samples: "模拟 {n} 手 · 对 {k} 家",
+    adv_final: "模拟 {n} 手 · 对 {k} 家 · 公共牌已发完",
+    adv_folded: "你这手已经弃牌了。",
+    /* finished-hand review */
+    res_title: "第 {n} 手 · 各家最终牌型（由强到弱）",
+    res_mucked: "盖牌，未亮出",
+    res_folded: "已弃牌",
+    res_note: "盖掉的牌不会公开。在开局设置里勾选“偷看模式”，弃牌玩家的底牌也会一起亮出来。",
+    res_preflop: "翻牌前就结束了，没有公共牌",
   },
 };
+
+/* hand categories, keyed by the engine's category number (8 = straight flush) */
+const CAT_ZH = { 8: "同花顺", 7: "四条", 6: "葫芦", 5: "同花", 4: "顺子",
+                 3: "三条", 2: "两对", 1: "一对", 0: "高牌" };
+function catName(row) {
+  if (G.lang !== "zh") return row.name;
+  return CAT_ZH[row.cat] !== undefined ? CAT_ZH[row.cat] : row.name;
+}
+function pct(x) { return Math.round(x * 100) + "%"; }
 
 function t(key, vars) {
   const table = I18N[G.lang] || I18N.en;
@@ -137,7 +198,10 @@ const VAL_WORD = { two: "2", three: "3", four: "4", five: "5", six: "6", seven: 
 function valChar(w) {
   w = String(w).toLowerCase();
   if (VAL_WORD[w]) return VAL_WORD[w];
-  const base = w.replace(/es$/, "").replace(/s$/, "");
+  // cards.plural() only ever appends "s" — "Sixes" is the one exception. A
+  // blanket /es$/ strip turns Nines into "nin" and Aces into "ac", which then
+  // fall through untranslated.
+  const base = w === "sixes" ? "six" : w.replace(/s$/, "");
   return VAL_WORD[base] || w;
 }
 
@@ -208,6 +272,8 @@ const G = {
   seatPos: {},        // name -> {x, y} in table % coords
   meta: {},
   summary: null,      // finished-hand recap, shown until the next deal
+  odds: null,         // newest live read for our seat (null until one arrives)
+  result: null,       // finished-hand review: every seat's cards + formula
   actions: {},        // name -> {key, n, k}: each seat's latest move this street
   accessCode: null,   // remembered ACCESS_CODE, if the host requires one
   lastAllowance: 0,   // last between-hands buy allowance (for re-render)
@@ -263,6 +329,7 @@ function applyLang() {
   $("btn-lang").textContent = G.lang === "zh" ? "EN" : "中文";
   // redraw everything language-dependent that's currently on screen
   if (G.state) render();
+  if (G.result && !$("result").classList.contains("hidden")) showResult();
   if (G.mode === "action") showActionControls();
   else if (G.mode === "between") showBetweenControls(G.lastAllowance);
 }
@@ -287,6 +354,7 @@ function startGame() {
     model: $("opt-model").value.trim() || undefined,
     offline: $("opt-offline").checked,
     show_cards: $("opt-showcards").checked,
+    odds: $("opt-odds").checked,
     seed: $("opt-seed").value === "" ? null : clampInt($("opt-seed").value, 0, 1e12, null),
     language: G.lang,          // what the agents speak
   };
@@ -355,6 +423,8 @@ function handle(ev) {
     case "hand_start":
       clearBubbles(); hideAward();
       resetSummary();
+      hideResult();
+      G.odds = null; G.result = null;
       G.actions = {};
       G.thinking = null;
       feed(t("feed_hand", { n: ev.hand_no, sb: ev.sb, bb: ev.bb, dealer: esc(ev.dealer) }), "sys");
@@ -384,9 +454,20 @@ function handle(ev) {
       (ev.players || []).forEach((p) =>
         feed(`<span class="who">${esc(p.name)}</span> ${t("shows")} ${cardsText(p.cards)} — ${esc(trHand(p.hand))}`));
       break;
-    case "peek":
-      (ev.players || []).forEach((p) =>
-        feed(`<span class="who">${esc(p.name)}</span> ${t("had")} ${cardsText(p.cards)}${p.folded ? t("folded_paren") : ""}${p.hand ? " — " + esc(trHand(p.hand)) : ""}`, "sys"));
+    case "hand_result":
+      G.result = ev;
+      showResult();
+      (ev.players || []).forEach((p) => {
+        if (!p.known || !p.hand) return;
+        feed(`<span class="who">${esc(p.name)}</span> ${t("had")} ${cardsText(p.cards)}` +
+             `${p.folded ? t("folded_paren") : ""} — ${esc(trHand(p.hand))}`, "sys");
+      });
+      break;
+    case "odds":
+      G.odds = ev.odds;
+      break;
+    case "autopilot":
+      // The snapshot carries the armed mode; this event just wakes the render.
       break;
     case "pot_award":
       feed(esc(trPot(ev.text)), "pot");
@@ -637,7 +718,148 @@ function render() {
   } else dbtn.classList.add("hidden");
 
   renderSummary();
+  renderAdvisor();
+  renderAutopilot();
 }
+
+/* ---- live read: best hand right now + what you can still get to ---- */
+
+function heroSeat() {
+  const s = G.state;
+  return s && (s.seats || []).find((x) => x.is_human);
+}
+
+function renderAdvisor() {
+  const el = $("advisor");
+  const s = G.state;
+  const hero = heroSeat();
+  // Nothing to advise on before the deal, or when odds were switched off.
+  if (!s || G.meta.odds === false || !hero || !hero.card_count) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+
+  // The made hand comes off the snapshot, so it re-reads on every event —
+  // the moment a card lands, not just when the odds finish simulating.
+  const made = s.hero_hand;
+  $("adv-made").textContent = made ? trHand(made.name) : t("adv_preflop");
+  const cards = made ? made.cards : (hero.cards || []);
+  $("adv-cards").innerHTML = cards.map((c) => cardHTML(c, "mini")).join("");
+
+  const o = G.odds;
+  if (!o || s.hero_folded) {
+    $("adv-equity").textContent = "";
+    $("adv-rows").innerHTML = "";
+    $("adv-note").textContent = s.hero_folded ? t("adv_folded") : "";
+    return;
+  }
+  $("adv-equity").textContent = pct(o.equity);
+  const legend =
+    `<div class="adv-row legend"><span class="adv-cat"></span>` +
+    `<span class="adv-num">${t("adv_make")}</span><span class="adv-bar"></span>` +
+    `<span class="adv-num">${t("adv_win")}</span></div>`;
+  const rows = (o.categories || [])
+    // A category you touch once in a thousand runouts is noise, not a plan.
+    .filter((c) => c.make >= 0.005)
+    .map((c) => {
+      const now = made && made.cat === c.cat ? " now" : "";
+      return `<div class="adv-row${now}">` +
+        `<span class="adv-cat">${esc(catName(c))}</span>` +
+        `<span class="adv-num">${pct(c.make)}</span>` +
+        `<span class="adv-bar"><i style="width:${Math.min(100, c.win * 100)}%"></i></span>` +
+        `<span class="adv-num win">${pct(c.win)}</span></div>`;
+    }).join("");
+  const total =
+    `<div class="adv-row total"><span class="adv-cat">${t("adv_total")}</span>` +
+    `<span class="adv-num"></span><span class="adv-bar"></span>` +
+    `<span class="adv-num win">${pct(o.equity)}</span></div>`;
+  $("adv-rows").innerHTML = legend + rows + total;
+  $("adv-note").textContent = t(o.final ? "adv_final" : "adv_samples",
+                                { n: o.samples, k: o.opponents });
+}
+
+/* ---- autopilot: commit to a move before the turn gets to you ---- */
+
+function renderAutopilot() {
+  const s = G.state;
+  const hero = heroSeat();
+  const el = $("autopilot");
+  const usable = !!(s && s.live && hero && hero.card_count &&
+                    !s.hero_folded && !hero.all_in);
+  el.classList.toggle("hidden", !usable);
+  if (!usable) return;
+  const mode = s.hero_auto;   // the engine's own state, never a local guess
+  document.querySelectorAll(".auto-btn").forEach((b) => {
+    b.classList.toggle("armed", b.dataset.mode === mode);
+  });
+  $("auto-state").textContent = mode ? t("auto_on_" + mode) : "";
+}
+
+document.querySelectorAll(".auto-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!G.sid) return;
+    const armed = G.state ? G.state.hero_auto : null;
+    const mode = btn.dataset.mode === armed ? null : btn.dataset.mode;
+    // If the turn is already ours, the server settles the move right away —
+    // lock the controls now so the same move can't also be clicked manually.
+    if (mode && G.mode === "action") {
+      G.mode = null; G.legal = null;
+      $("controls").classList.add("disabled");
+      $("hero-hint").textContent = "";
+    }
+    fetch("/api/auto?sid=" + G.sid, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    }).catch(() => {});
+  });
+});
+
+/* ---- finished-hand review ---- */
+
+function showResult() {
+  const r = G.result;
+  if (!r) return;
+  $("result-title").textContent = t("res_title", { n: r.hand_no });
+  $("result-board").innerHTML = (r.board || []).length
+    ? (r.board || []).map((c) => cardHTML(c, "mini")).join("")
+    : `<span class="dim">${t("res_preflop")}</span>`;
+  $("result-rows").innerHTML = (r.players || []).map(resultRow).join("");
+  $("result-note").textContent =
+    (r.players || []).some((p) => !p.known) ? t("res_note") : "";
+  $("result").classList.remove("hidden");
+}
+
+function hideResult() { $("result").classList.add("hidden"); }
+
+function resultRow(p, i) {
+  const name = `<span class="res-name${p.is_human ? " you" : ""}">${esc(p.name)}</span>`;
+  if (!p.known) {
+    return `<div class="res-row muck"><span class="res-place"></span>${name}` +
+      `<span class="res-hole">${cardHTML(null, "mini")}${cardHTML(null, "mini")}</span>` +
+      `<span class="res-hand dim">${t("res_mucked")}</span>` +
+      `<span class="res-five"></span><span class="res-won"></span></div>`;
+  }
+  const hole = (p.cards || []).map((c) => cardHTML(c, "mini")).join("");
+  // In the five that played, ring the ones that came out of their hand — that's
+  // the difference between a hand they made and a board everyone shares.
+  const mine = new Set((p.cards || []).map((c) => c.code));
+  const five = (p.best5 || [])
+    .map((c) => cardHTML(c, "mini" + (mine.has(c.code) ? " own" : ""))).join("");
+  const tag = p.won ? `<span class="res-win">+${p.won}</span>`
+                    : (p.folded ? `<span class="dim">${t("res_folded")}</span>` : "");
+  return `<div class="res-row${p.folded ? " folded" : ""}${p.won ? " won" : ""}">` +
+    `<span class="res-place">#${i + 1}</span>${name}` +
+    `<span class="res-hole">${hole}</span>` +
+    `<span class="res-hand">${p.hand ? esc(trHand(p.hand)) : "—"}</span>` +
+    `<span class="res-five">${five}</span>` +
+    `<span class="res-won">${tag}</span></div>`;
+}
+
+$("result-close").addEventListener("click", hideResult);
+$("result").addEventListener("click", (e) => {
+  if (e.target.id === "result") hideResult();  // click the backdrop to dismiss
+});
 
 function seatEl(seat, x, y) {
   const el = document.createElement("div");
@@ -725,6 +947,16 @@ function backEl(mini) {
   const el = document.createElement("div");
   el.className = "card back" + (mini ? " mini" : "");
   return el;
+}
+
+/* Same card as cardEl, as an HTML string — for the panels that build a whole
+ * list in one go. Pass c = null for a face-down card. Mini cards hide their
+ * corners in CSS, so rank + pip is the whole card. */
+function cardHTML(c, extra) {
+  const cls = "card " + (extra || "");
+  if (!c) return `<div class="${cls} back"></div>`;
+  return `<div class="${cls}${c.red ? " red" : ""}">` +
+    `<div class="rank">${c.rank}</div><div class="pip">${c.symbol}</div></div>`;
 }
 
 /* speech bubbles anchored above a seat */
