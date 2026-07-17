@@ -761,6 +761,35 @@ def test_odds_decompose_into_categories():
     ok(abs(made - 0.350) < 0.02, "a flopped flush draw completes ~35% by the river")
 
 
+def test_starting_hand_named_before_the_flop():
+    ok(evaluator.starting_hand(cards("9s 9c")) == {"kind": "pair", "name": "Pocket Nines"},
+       "a pocket pair is named as one")
+    ok(evaluator.starting_hand(cards("As Ks")) ==
+       {"kind": "suited", "name": "Ace-King suited"}, "suited cards, high card first")
+    ok(evaluator.starting_hand(cards("5c 9h")) ==
+       {"kind": "offsuit", "name": "Nine-Five offsuit"}, "offsuit cards, high card first")
+    ok(evaluator.starting_hand(cards("6s 6d"))["name"] == "Pocket Sixes",
+       "six still pluralizes as sixes")
+    ok(evaluator.starting_hand(cards("As")) is None, "one card isn't a starting hand")
+
+
+def test_odds_report_the_preflop_shape():
+    # Preflop there's no five-card hand, but the panel must still say what you
+    # hold — otherwise the read looks like it wasn't computed at all.
+    r = odds.hand_odds(cards("9s 9c"), [], 2, random.Random(3), time_budget=0.2)
+    ok(r["made"]["preflop"] is True, "flagged as a preflop shape, not a made hand")
+    ok(r["made"]["name"] == "Pocket Nines", "...and named")
+    ok(r["made"]["kind"] == "pair" and r["made"]["cat"] is None,
+       "the shape is structured so a front-end can word it its own way")
+    ok(len(r["made"]["cards"]) == 2, "showing the two cards you actually hold")
+    ok(r["equity"] > 0, "and the win rate is computed preflop like any street")
+
+    r = odds.hand_odds(cards("9s 9c"), cards("2h 5c 7s"), 2, random.Random(3),
+                       time_budget=0.2)
+    ok(r["made"]["preflop"] is False and r["made"]["name"] == "a Pair of Nines",
+       "once there's a board it's a real hand again")
+
+
 def test_odds_on_a_complete_board():
     r = odds.hand_odds(cards("As Ks"), cards("Qs 7s 2s Td 3h"), 1,
                        random.Random(2), time_budget=0.2)
@@ -1031,6 +1060,8 @@ if __name__ == "__main__":
     test_personality_differentiates()
     test_odds_match_known_equities()
     test_odds_decompose_into_categories()
+    test_starting_hand_named_before_the_flop()
+    test_odds_report_the_preflop_shape()
     test_odds_on_a_complete_board()
     test_odds_declines_impossible_spots()
     test_autopilot_fold_waits_for_a_bet()

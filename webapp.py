@@ -196,11 +196,20 @@ class WebSink(ui.Sink):
             })
         # The human's best hand right now, recomputed on every event so the
         # readout tracks the board card by card instead of only on their turn.
+        # Before the flop there's no five-card hand to name, so it carries the
+        # preflop shape instead — "pocket nines" is still an answer.
         hero_hand = None
-        if human is not None and human.hole and len(human.hole) + len(g.board) >= 5:
-            rank, five = evaluator.best_hand(list(human.hole) + list(g.board))
-            hero_hand = {"name": evaluator.hand_name(rank), "cat": rank[0],
-                         "cards": cards_data(five)}
+        if human is not None and human.hole:
+            if len(human.hole) + len(g.board) >= 5:
+                rank, five = evaluator.best_hand(list(human.hole) + list(g.board))
+                hero_hand = {"name": evaluator.hand_name(rank), "cat": rank[0],
+                             "cards": cards_data(five), "preflop": False}
+            else:
+                shape = evaluator.starting_hand(human.hole)
+                if shape is not None:
+                    hero_hand = {"name": shape["name"], "cat": None,
+                                 "kind": shape["kind"],
+                                 "cards": cards_data(human.hole), "preflop": True}
         return {
             "hand_no": g.hand_no,
             "street": g.street if live else None,
@@ -301,8 +310,10 @@ class WebSink(ui.Sink):
         data = dict(payload)
         made = payload.get("made")
         if made:
-            data["made"] = {"cat": made["cat"], "name": made["name"],
-                            "cards": cards_data(made["cards"])}
+            # Pass every field the engine sent through — only the cards need
+            # converting. Listing the keys here instead would silently drop any
+            # new one (it already ate the preflop shape once).
+            data["made"] = dict(made, cards=cards_data(made["cards"]))
         self.send("odds", odds=data)
 
     def autopilot(self, player, mode):

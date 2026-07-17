@@ -372,7 +372,8 @@ def hero_odds(payload):
                                        % (payload["opponents"], payload["samples"])))
     made = payload["made"]
     if made:
-        out("   now: %s   %s" % (bold(made["name"]), cards_str(made["cards"])))
+        label = "holding" if made.get("preflop") else "now"
+        out("   %s: %s   %s" % (label, bold(made["name"]), cards_str(made["cards"])))
     for row in payload["categories"]:
         if row["make"] < 0.005:
             continue  # a long shot nobody is drawing to — keep the table short

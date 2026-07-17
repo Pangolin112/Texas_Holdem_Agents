@@ -38,6 +38,7 @@ const I18N = {
     buy_upto: "up to {n}", buy_max: "(max reached this hand)",
     ph_say: "Say something to the table…  (they hear you and answer)", say: "Say",
     your_move: "Your move.", you_have: "You have {hand}",
+    hint_odds: " · you win {p}",
     hand_over: "Hand over — deal the next one, or buy in.",
     hand_no: "Hand #{n}", blinds: "blinds {sb}/{bb}",
     between_hands: "between hands", in_play: "in play", mode_over: "game over",
@@ -114,6 +115,7 @@ const I18N = {
     buy_upto: "最多 {n}", buy_max: "（本手已达上限）",
     ph_say: "对牌桌说点什么……（他们听得见，也会回话）", say: "说",
     your_move: "该你了。", you_have: "你现在是{hand}",
+    hint_odds: " · 胜率 {p}",
     hand_over: "这手结束了——发下一手，或买些筹码。",
     hand_no: "第 {n} 手", blinds: "盲注 {sb}/{bb}",
     between_hands: "两手之间", in_play: "进行中", mode_over: "游戏结束",
@@ -175,6 +177,19 @@ function catName(row) {
   return CAT_ZH[row.cat] !== undefined ? CAT_ZH[row.cat] : row.name;
 }
 function pct(x) { return Math.round(x * 100) + "%"; }
+
+/* What you're holding, named: a real hand once there's a board, the preflop
+ * shape before that. The engine sends the shape structured (pair/suited/
+ * offsuit) rather than a phrase, so zh can say it its own way. */
+function handLabel(made) {
+  if (!made) return null;
+  if (!made.preflop) return trHand(made.name);
+  if (G.lang !== "zh") return made.name;
+  const r = (made.cards || []).map((c) => c.rank);
+  if (made.kind === "pair") return "口袋对 " + r[0];
+  // Hyphenated: a ten makes "109不同花" unreadable without a separator.
+  return r[0] + "-" + r[1] + (made.kind === "suited" ? " 同花" : " 不同花");
+}
 
 function t(key, vars) {
   const table = I18N[G.lang] || I18N.en;
@@ -550,9 +565,21 @@ function showActionControls() {
 
   $("act-raise").classList.toggle("hidden", !L.can_raise);
   $("raise-panel").classList.add("hidden");
+  $("hero-hint").textContent = heroHintText();
+}
 
-  const hint = L.hero_hand_hint ? t("you_have", { hand: trHand(L.hero_hand_hint) }) : t("your_move");
-  $("hero-hint").textContent = hint;
+/* The line right above the buttons — what you hold and what it's worth. Reads
+ * off the live snapshot rather than the turn's legal-move info, so it names the
+ * preflop shape too, where there's no five-card hand to report. */
+function heroHintText() {
+  const s = G.state;
+  const made = s && s.hero_hand;
+  const label = handLabel(made);
+  let txt = label ? t("you_have", { hand: label }) : t("your_move");
+  if (G.odds && s && !s.hero_folded) {
+    txt += t("hint_odds", { p: pct(G.odds.equity) });
+  }
+  return txt;
 }
 
 $("act-fold").addEventListener("click", () => act("f"));
@@ -720,6 +747,9 @@ function render() {
   renderSummary();
   renderAdvisor();
   renderAutopilot();
+  // Keep the hint live while it's our turn: the odds land after the prompt, and
+  // the board can move under us when we're all-in.
+  if (G.mode === "action") $("hero-hint").textContent = heroHintText();
 }
 
 /* ---- live read: best hand right now + what you can still get to ---- */
@@ -743,7 +773,7 @@ function renderAdvisor() {
   // The made hand comes off the snapshot, so it re-reads on every event —
   // the moment a card lands, not just when the odds finish simulating.
   const made = s.hero_hand;
-  $("adv-made").textContent = made ? trHand(made.name) : t("adv_preflop");
+  $("adv-made").textContent = made ? handLabel(made) : t("adv_preflop");
   const cards = made ? made.cards : (hero.cards || []);
   $("adv-cards").innerHTML = cards.map((c) => cardHTML(c, "mini")).join("");
 

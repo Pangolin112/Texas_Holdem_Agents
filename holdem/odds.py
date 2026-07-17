@@ -28,7 +28,8 @@ import time
 from itertools import product
 
 from .cards import Card, RANK_VALUES, SUITS
-from .evaluator import CATEGORY_NAMES, best_hand, hand_name, rank_cards
+from .evaluator import (CATEGORY_NAMES, best_hand, hand_name, rank_cards,
+                        starting_hand)
 
 FULL_DECK = [Card(v, s) for v, s in product(RANK_VALUES.values(), SUITS)]
 
@@ -52,10 +53,18 @@ def hand_odds(hole, board, opponents, rng=None, max_samples=MAX_SAMPLES,
     if len(hole) < 2 or need_board < 0 or need > len(deck):
         return None
 
-    made = None
+    # What you're holding right now: a real five-card hand once the board can
+    # make one, and before that the preflop shape — never nothing.
     if len(hole) + len(board) >= 5:
         rank, five = best_hand(hole + board)
-        made = {"cat": rank[0], "name": hand_name(rank), "cards": five}
+        made = {"cat": rank[0], "name": hand_name(rank), "cards": five,
+                "preflop": False}
+    else:
+        shape = starting_hand(hole)
+        made = None if shape is None else {
+            "cat": None, "name": shape["name"], "kind": shape["kind"],
+            "cards": list(hole), "preflop": True,
+        }
 
     make_counts = {}
     win_shares = {}

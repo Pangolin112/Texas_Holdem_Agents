@@ -177,7 +177,21 @@ unchanged — it's more ammunition on the table, not profit.
 While you're in a hand, the game keeps a running read on your seat: **the best
 five cards you hold right now**, updated the moment a card lands — and, for
 every hand you could still *get to*, how often you make it and how often that
-actually wins:
+actually wins. It runs from the deal, **preflop included**, where there's no
+five-card hand yet so it names what you're actually holding instead (*Pocket
+Nines*, *Ace-King suited*) and prices that:
+
+```
+ ── your odds ──   vs 3 live · 10112 hands simulated
+   holding: Seven-Six offsuit   6♣ 7♦
+   Straight         make 10%   win  7%   █
+   Two Pair         make 22%   win  6%   █
+   Pair             make 43%   win  3%   █
+   ...
+   TOTAL            you win 21%   (win 20% · tie 3%)
+```
+
+Once there's a board it's a real hand again:
 
 ```
  ── your odds ──   vs 1 live · 15104 hands simulated

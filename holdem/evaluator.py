@@ -163,6 +163,23 @@ def rank_cards(cards):
     return tuple([HIGH_CARD] + values[:5])
 
 
+def starting_hand(hole):
+    """The shape of two hole cards, before there's any five-card hand to name.
+
+    Preflop there's nothing to evaluate yet, but "pocket nines" or "ace-king
+    suited" is what a player is actually holding in their head — so that's what
+    the table shows until the flop lands.
+    """
+    if len(hole) != 2:
+        return None
+    high, low = sorted(hole, key=lambda c: -c.value)
+    if high.value == low.value:
+        return {"kind": "pair", "name": "Pocket %s" % plural(high.value)}
+    kind = "suited" if high.suit == low.suit else "offsuit"
+    return {"kind": kind, "name": "%s-%s %s" % (VALUE_NAMES[high.value],
+                                                VALUE_NAMES[low.value], kind)}
+
+
 def hand_name(rank):
     cat = rank[0]
     if cat == STRAIGHT_FLUSH:
