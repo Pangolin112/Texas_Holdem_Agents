@@ -1482,6 +1482,81 @@ def test_review_text_names_the_habit_only_with_evidence():
     ok(llm.review(cheap), "a trivial hand never spends a model call")
 
 
+def test_fast_forward_flags_only_a_folded_hero():
+    hero = HumanPlayer("You", 1000)
+    a, b = Player("A", 1000), Player("B", 1000)
+    game = make_game([hero, a, b])
+    game.hand_players = [hero, a, b]
+    game.hand_live = True
+    for p in game.hand_players:
+        p.hole = []
+    ok(not game.build_view(a)["fast"], "hero still in the hand: full-depth thinking")
+    hero.folded = True
+    ok(game.build_view(a)["fast"], "hero folded: the rest of the hand hurries")
+    hero.folded = False
+    hero.all_in = True
+    ok(not game.build_view(a)["fast"],
+       "hero all-in still has the pot at stake — those moves deserve real thought")
+    hero.all_in = False
+
+    hero.folded = True
+    slow = make_game([hero, a, b], fast_forward=False)
+    slow.hand_players = [hero, a, b]
+    slow.hand_live = True
+    ok(not slow.build_view(a)["fast"], "--no-fast-forward keeps everything at full depth")
+    hero.folded = False
+
+
+def test_fast_forward_never_touches_the_model():
+    brain = LLMBrain(client=object(), model="x", personality=PERSONALITIES[0],
+                     rng=random.Random(3))
+    calls = []
+    brain._ask = lambda *a, **k: (calls.append(1), '{"action": "call", "say": ""}')[1]
+    view = _pview(to_call=50)
+    view["fast"] = True
+    for i in range(60):
+        brain.fallback.rng = random.Random(i)
+        act, _say = brain.decide(_seat(), view)
+        assert act.kind in (FOLD, CHECK, CALL, RAISE, ALL_IN), act.kind
+    ok(not calls, "60 fast decisions: instinct only, the model is never asked")
+    view["fast"] = False
+    brain.decide(_seat(), view)
+    ok(calls, "the moment the next hand deals the hero back in, real thinking resumes")
+
+
+def test_no_commentary_on_a_hand_the_player_left():
+    hero = HumanPlayer("You", 1000)
+    rng = random.Random(4)
+    by_name = {p["name"]: p for p in PERSONALITIES}
+    mike = LLMPlayer("Mike", 1000, by_name["Mike"], HeuristicBrain(by_name["Mike"], rng))
+    sarah = LLMPlayer("Sarah", 1000, by_name["Sarah"], HeuristicBrain(by_name["Sarah"], rng))
+    game = make_game([hero, mike, sarah], rng=rng)
+    game.hand_players = list(game.players)
+    game.hand_live = True
+    hero.folded = True
+    for _ in range(30):
+        game.react_to_event(mike, "Mike goes ALL-IN for 900.", chance=1.0)
+    ok(not game.chat, "a folded hero gets speed, not commentary")
+    hero.folded = False
+    for _ in range(5):  # heuristic reactors stay quiet sometimes
+        game.react_to_event(mike, "Mike goes ALL-IN for 900.", chance=1.0)
+        if game.chat:
+            break
+    ok(game.chat, "with the hero back in a hand, the table talks again")
+
+    # A bot naming another bot mid-fast-forward must not solicit a reply —
+    # that reply is a model call on a pot the player left.
+    game.chat = []
+    hero.folded = True
+    game.deliver_chat(mike, "Sarah, you play scared", in_action=True)
+    ok(len(game.chat) == 1, "the taunt shows, but draws no (model-priced) answer")
+    # ...while the human's own words still get answered: they asked.
+    game.chat = []
+    game.deliver_chat(hero, "Sarah, why so quiet tonight?", in_action=True)
+    ok(len(game.chat) >= 2, "a folded human speaking still gets a reply")
+    hero.folded = False
+
+
 def test_farewell_sums_up_the_night():
     game, hero, a, b = coach_game()
     game.hand_no = 8
@@ -1899,6 +1974,9 @@ if __name__ == "__main__":
     test_advice_is_always_legal()
     test_advice_prices_real_hands_end_to_end()
     test_advice_carries_the_numbers_it_reasoned_from()
+    test_fast_forward_flags_only_a_folded_hero()
+    test_fast_forward_never_touches_the_model()
+    test_no_commentary_on_a_hand_the_player_left()
     test_farewell_sums_up_the_night()
     test_send_off_matches_the_night()
     test_danger_scale_tracks_the_spot()

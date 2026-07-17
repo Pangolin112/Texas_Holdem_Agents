@@ -49,7 +49,20 @@ Options:
 | `--show-cards` | peek mode: also open up **folded** players' cards in the end-of-hand review |
 | `--no-odds` | don't show your live hand strength and win odds |
 | `--no-coach` | play without the AI coach reading the table for you |
+| `--no-fast-forward` | after you fold, let the AIs keep thinking at full depth instead of finishing the hand on instinct |
 | `--lang zh` | the agents speak Chinese — table talk, reactions, explanations (default `en`) |
+
+**Fast-forward.** Once you fold, the rest of the hand is bots settling a pot
+you have no stake in — so by default the table hurries: LLM seats finish the
+hand on their built-in instincts (same personality weights, zero model calls),
+spontaneous commentary goes quiet, and a bot's one-liner can't solicit a
+model-priced reply. Measured on the live API: the remainder of a hand that
+would have taken ~20-30 seconds of thinking completes in under two. Your own
+chat still gets answered while you watch, and the moment the next hand deals
+you in, full-depth thinking resumes. Deliberately **not** triggered when
+you're all-in — you still have the pot at stake, and whether the others fold
+or fight decides how much of it you win, so those moves keep their real
+thinking. Turn it off with `--no-fast-forward` or the setup checkbox.
 
 ## Play — web (2D table)
 

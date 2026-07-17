@@ -24,6 +24,7 @@ const I18N = {
     chk_peek: "Peek mode (reveal cards after each hand)",
     chk_odds: "Show my live hand strength and win odds",
     chk_coach: "AI coach: read the table and tell me what to do",
+    chk_fast: "Fast-forward the hand after I fold",
     lbl_seed: "Seed (optional, reproducible deck)", ph_seed: "random",
     deal_in: "Deal me in",
     shuffling: "Shuffling…",
@@ -142,6 +143,7 @@ const I18N = {
     chk_peek: "偷看模式（每手结束后亮出所有底牌）",
     chk_odds: "显示我的实时牌力与胜率",
     chk_coach: "AI 教练：帮我读牌桌，告诉我该怎么打",
+    chk_fast: "我弃牌后快进——AI 秒下,直奔下一手",
     lbl_seed: "随机种子（可选，可复现的牌序）", ph_seed: "随机",
     deal_in: "发牌，我上桌",
     shuffling: "洗牌中…",
@@ -456,6 +458,7 @@ function startGame() {
     show_cards: $("opt-showcards").checked,
     odds: $("opt-odds").checked,
     coach: $("opt-coach").checked,
+    fast: $("opt-fast").checked,
     seed: $("opt-seed").value === "" ? null : clampInt($("opt-seed").value, 0, 1e12, null),
     language: G.lang,          // what the agents speak
   };

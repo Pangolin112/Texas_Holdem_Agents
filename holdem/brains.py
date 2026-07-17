@@ -798,6 +798,12 @@ class LLMBrain(ModelCaller, Brain):
         self._warned = False
 
     def decide(self, player: Player, view: PlayerView) -> tuple[Action, Optional[str]]:
+        if view.get("fast"):
+            # The human has folded this hand: nobody left at the table is being
+            # read or bluffed, so finish it on instinct — the same personality
+            # weights, none of the per-move model latency. The player is
+            # waiting on the next deal, not on this pot.
+            return self.fallback.decide(player, view)
         ui.thinking(player.name)
         try:
             raw = self._ask(player, view)

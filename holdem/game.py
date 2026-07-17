@@ -35,7 +35,8 @@ def looks_like_move_question(text):
 
 class TexasHoldemGame:
     def __init__(self, players, sb=10, bb=20, rng=None, interactive=True,
-                 reveal_all=False, language="en", show_odds=True, advisor=None):
+                 reveal_all=False, language="en", show_odds=True, advisor=None,
+                 fast_forward=True):
         self.players = list(players)  # seat order; only players with chips
         self.sb = sb
         self.bb = bb
@@ -44,6 +45,10 @@ class TexasHoldemGame:
         self.reveal_all = reveal_all  # peek mode: show every hand once it's over
         self.language = language      # what the agents speak ("en" / "zh")
         self.show_odds = show_odds    # live equity read for the human seat
+        # Once the human folds, the rest of the hand is bots settling a pot the
+        # player has no stake in — hurry it (instinct decisions, no commentary)
+        # so the next deal comes fast. See hero_out().
+        self.fast_forward = fast_forward
         # The coach behind the player's chair (holdem/advisor.py), or None for
         # nobody. It needs the equity numbers, so it can't work without them.
         self.advisor = advisor if show_odds else None
@@ -277,6 +282,19 @@ class TexasHoldemGame:
         the human can speak whenever they like, and the table still answers."""
         self.deliver_chat(speaker, text)
 
+    def hero_out(self):
+        """True while the human has folded out of a live hand — the stretch
+        where nobody at the table is being read, bluffed, or entertained.
+
+        Deliberately NOT true when the human is all-in: an all-in player still
+        has the pot at stake, and whether the others fold or fight decides how
+        much of it they win — those moves deserve real thought. A folded player
+        has nothing riding on anything; speed is worth more than drama.
+        """
+        human = self.human
+        return (self.fast_forward and self.hand_live
+                and human is not None and human.folded)
+
     def reaction_chance(self, desc):
         # Kept low on purpose: every reaction is another model call to wait on.
         if "ALL-IN" in desc or "all-in" in desc:
@@ -290,6 +308,8 @@ class TexasHoldemGame:
     def react_to_event(self, actor, event, chance):
         """Once in a while a single bystander drops a one-off comment on a move
         or result. It's a one-shot — nobody replies to it — to keep the pace up."""
+        if self.hero_out():
+            return  # fast-forward: no commentary on a hand the player left
         if self.rng.random() >= chance:
             return
         candidates = [pl for pl in self.players
@@ -310,6 +330,11 @@ class TexasHoldemGame:
         text = " ".join(text.split())[:max_len]
         if not text:
             return
+        # Fast-forward: a bot's one-liner during a hand the player left must
+        # not solicit a (model-priced) reply. The human's own words still draw
+        # answers — they're watching, and they asked.
+        if solicit and not speaker.is_human and self.hero_out():
+            solicit = False
         with self.talk_lock:
             self._deliver_chat_locked(speaker, text, in_action, solicit, force_to)
 
@@ -922,6 +947,9 @@ class TexasHoldemGame:
             "hand_no": self.hand_no,
             "street": self.street,
             "blinds": (self.sb, self.bb),
+            # The hurry-up flag: the human has folded, so a brain may answer on
+            # instinct instead of spending a model call on a pot they left.
+            "fast": self.hero_out(),
             "board": board,
             "pot": self.pot_total(),
             "to_call": to_call,

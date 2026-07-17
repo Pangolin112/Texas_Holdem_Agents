@@ -58,6 +58,9 @@ def parse_args():
                         help="don't show your live hand strength and win odds")
     parser.add_argument("--no-coach", action="store_true",
                         help="play without the AI coach reading the table for you")
+    parser.add_argument("--no-fast-forward", action="store_true",
+                        help="after you fold, let the AIs keep thinking at full "
+                             "depth instead of finishing the hand on instinct")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
     parser.add_argument("--lang", choices=("en", "zh"), default="en",
                         help="table language: what the agents speak "
@@ -138,7 +141,8 @@ def main():
 
     game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng,
                            reveal_all=args.show_cards, language=args.lang,
-                           show_odds=not args.no_odds, advisor=coach)
+                           show_odds=not args.no_odds, advisor=coach,
+                           fast_forward=not args.no_fast_forward)
     try:
         game.run()
     except (QuitGame, KeyboardInterrupt):

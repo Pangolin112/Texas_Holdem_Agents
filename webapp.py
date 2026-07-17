@@ -449,6 +449,7 @@ def build_game(options):
     show_odds = options.get("odds", True) is not False
     # The coach reasons from the equity numbers, so it can't run without them.
     want_coach = options.get("coach", True) is not False and show_odds
+    fast_forward = options.get("fast", True) is not False
     # Table language: what the agents speak ("zh" = Chinese, default English).
     lang = "zh" if str(options.get("language") or "").lower().startswith("zh") else "en"
 
@@ -467,7 +468,8 @@ def build_game(options):
                  else LLMAdvisor(client, model_chain, rng, lang=lang))
 
     game = TexasHoldemGame(players, sb=sb, bb=bb, rng=rng, reveal_all=reveal_all,
-                           language=lang, show_odds=show_odds, advisor=coach)
+                           language=lang, show_odds=show_odds, advisor=coach,
+                           fast_forward=fast_forward)
     meta = {
         "note": note,
         "offline": offline,
@@ -478,6 +480,7 @@ def build_game(options):
         "odds": show_odds,
         "coach": coach is not None,
         "coach_name": ADVISOR["name"],
+        "fast": fast_forward,
         "language": lang,
         # natural agent voices need the API; the browser falls back to its own
         # speech synthesis when this is False. DeepSeek's endpoint has no TTS,
