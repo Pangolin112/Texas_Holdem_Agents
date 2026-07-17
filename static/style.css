@@ -451,12 +451,35 @@ button { font-family: inherit; cursor: pointer; border: none; }
   max-height: 132px; overflow-y: auto;
 }
 .read-row { font-size: 11px; }
-.read-top { display: grid; grid-template-columns: 1fr 56px; gap: 6px; align-items: center; }
+.read-top { display: grid; grid-template-columns: auto 1fr 56px; gap: 6px; align-items: center; }
 .read-name { color: #c4cdd5; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.read-bluff {
+  justify-self: start; font-size: 9.5px; font-weight: 700; padding: 1px 6px;
+  border-radius: 7px; background: #3a2545; color: #e0aaff; border: 1px solid #5c3a6e;
+  white-space: nowrap;
+}
 .read-bar { height: 5px; background: #0e141a; border-radius: 3px; overflow: hidden; }
 .read-bar i { display: block; height: 100%; background: linear-gradient(90deg, #7a3a33, var(--red)); }
 /* the range call: the point of the panel, so it wraps instead of truncating */
 .read-note { color: var(--dim); line-height: 1.35; margin-top: 1px; }
+
+/* what his range is made of — a partition, so the bar is always exactly full */
+.range-bar {
+  display: flex; height: 7px; border-radius: 3px; overflow: hidden;
+  margin-top: 4px; background: #0e141a;
+}
+.range-bar i { display: block; height: 100%; }
+.range-bar i.b-strong { background: #e8523f; }
+.range-bar i.b-medium { background: #d08a2a; }
+.range-bar i.b-draw   { background: #3aa0e0; }
+.range-bar i.b-weak   { background: #4a5a66; }
+.range-bar i.b-air    { background: #8a6fd0; }
+.range-keys { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; font-size: 9.5px; }
+.range-keys .k-strong { color: #e8523f; }
+.range-keys .k-medium { color: #d08a2a; }
+.range-keys .k-draw   { color: #3aa0e0; }
+.range-keys .k-weak   { color: #8b98a3; }
+.range-keys .k-air    { color: #b39ddb; }
 .coach-math { color: var(--dim); font-size: 10.5px; }
 /* the word after the hand — colour carries the tone */
 .coach-verdict {

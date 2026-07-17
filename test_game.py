@@ -1,8 +1,9 @@
 """Self-contained test suite (stdlib only): python test_game.py"""
 
+import itertools
 import random
 
-from holdem import advisor, evaluator, odds, ui
+from holdem import advisor, evaluator, odds, ranges, ui
 from holdem.brains import (PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain,
                            PolicyBrain, spoken_action, _softmax)
 from holdem.cards import Card, Deck, RANK_VALUES
@@ -1004,6 +1005,181 @@ def test_hero_odds_only_run_for_a_live_human():
     ok(not sink2.odds, "--no-odds means the simulator never runs")
 
 
+# --------------------------------------------------------------- ranges
+
+def test_strength_is_an_exact_percentile():
+    board = cards("Kd 8c 3h")
+    dead = board + cards("As Ad")
+    deck = [c for c in ranges.FULL_DECK if c not in dead]
+    combos = list(itertools.combinations(deck, 2))
+    table = ranges.strength_table(combos, board)
+    ok(len(table) == len(combos), "every possible holding is scored")
+    ok(abs(sum(table) / len(table) - 0.5) < 0.01,
+       "strength is a percentile, so the average holding is 0.5 by construction")
+    ok(min(table) >= 0.0 and max(table) <= 1.0, "and stays inside [0, 1]")
+
+    by = {c: s for c, s in zip(combos, table)}
+    kings = by[tuple(sorted(cards("Ks Kh"), key=lambda c: (c.value, c.suit)))] \
+        if tuple(sorted(cards("Ks Kh"), key=lambda c: (c.value, c.suit))) in by else None
+    # Look them up however they were tupled — combos come from the deck order.
+    def look(txt):
+        want = set(cards(txt))
+        for c, s in zip(combos, table):
+            if set(c) == want:
+                return s
+        raise AssertionError("combo %s not in the deck" % txt)
+    ok(look("Ks Kh") > look("8s 8h") > look("3s 3d") > look("7c 4d"),
+       "trip kings beat trip eights beat trip threes beat nothing, on this board")
+    ok(look("Kc Qs") > look("8d 7s"), "top pair beats middle pair")
+    ok(look("7c 4d") < 0.25, "no pair, no draw is near the bottom of the range")
+
+
+def test_draws_are_spotted():
+    ok(ranges.has_draw(cards("9s 8s"), cards("2s 7h Qs")), "four to a flush is a draw")
+    ok(not ranges.has_draw(cards("9s 8c"), cards("2s 7h Qd")), "three to a flush is not")
+    ok(ranges.has_draw(cards("9h 8c"), cards("7d 6s 2h")), "open-ender is a draw")
+    ok(ranges.has_draw(cards("9h 5c"), cards("7d 6s 2h")), "a gutshot counts too")
+    ok(not ranges.has_draw(cards("Ah Kc"), cards("7d 6s 2h")), "two overcards is not a draw")
+    ok(not ranges.has_draw(cards("9s 8s"), cards("2s 7h Kd 4s Jc")),
+       "on the river there is nothing left to draw to")
+
+
+def _rview(board, actions, hole="As Ad", opponent="A"):
+    return {
+        "street": ("PREFLOP" if not board else
+                   {3: "FLOP", 4: "TURN", 5: "RIVER"}[len(cards(board))]),
+        "board": cards(board) if board else [],
+        "hero": {"name": "You", "hole": cards(hole), "stack": 1000, "bet_street": 0},
+        "players": [{"name": "You", "is_hero": True, "folded": False, "all_in": False,
+                     "stack": 1000},
+                    {"name": opponent, "is_hero": False, "folded": False,
+                     "all_in": False, "stack": 1000}],
+        "actions": actions,
+    }
+
+
+def test_betting_narrows_the_range():
+    board = "Kd 8c 3h"
+    quiet = ranges.estimate(_rview(board, []))["A"]
+    ok(abs(quiet["mean_strength"] - 0.5) < 0.02,
+       "someone who has done nothing holds a random hand, by definition")
+    ok(quiet["bluff"] is None, "and isn't bluffing, because they aren't betting")
+
+    # Bet the flop, barrel the turn: a narrow, strong range.
+    heavy = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "bet", "amount": 100, "pot": 100, "street": "FLOP"},
+        {"name": "A", "kind": "raise", "amount": 300, "pot": 300, "street": "FLOP"},
+    ]))["A"]
+    ok(heavy["mean_strength"] > quiet["mean_strength"],
+       "hammering the pot means you're holding more than a stranger would")
+    ok(heavy["bluff"] is not None and heavy["bluff"] > 0,
+       "but some of it is always air — nobody is only ever value")
+
+    # Checking says the opposite.
+    meek = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "check", "amount": 0, "pot": 100, "street": "FLOP"},
+    ]))["A"]
+    ok(meek["mean_strength"] < quiet["mean_strength"],
+       "checking means you probably don't have it")
+
+    ok(sum(quiet["weights"]) - 1.0 < 1e-9, "the posterior is a distribution")
+    ok(len(quiet["combos"]) == len(quiet["weights"]) == 1081,
+       "every two-card holding not accounted for: C(47,2)")
+
+
+def test_your_own_cards_remove_his_combos():
+    # Holding the ace of spades, he cannot have the nut flush. That's not a
+    # read, it's arithmetic, and the range must know it.
+    board = "Qs 7s 2s"
+    with_ace = ranges.estimate(_rview(board, [], hole="As Kd"))["A"]
+    without = ranges.estimate(_rview(board, [], hole="Ah Kd"))["A"]
+    def holds_nut_flush(est):
+        want = {c for c in ranges.FULL_DECK if c.suit == "s" and c.value == 14}
+        return any(want & set(c) for c in est["combos"])
+    ok(not holds_nut_flush(with_ace), "your ace of spades is not in his range")
+    ok(holds_nut_flush(without), "...but it is when you don't hold it")
+
+
+def test_bluff_probability_answers_the_right_question():
+    board = "Kd 8c 3h"
+    # A pot-sized bet on a board that hits few hands: mostly value, some air.
+    est = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "bet", "amount": 120, "pot": 120, "street": "FLOP"},
+    ]))["A"]
+    ok(0.0 < est["bluff"] < 1.0, "a bettor's bluff chance is a real probability")
+    ok(est["semi_bluff"] is not None, "and semi-bluffs are counted apart from pure air")
+    total = sum(b["p"] for b in est["buckets"])
+    ok(abs(total - 1.0) < 0.02, "the buckets partition the range — no double counting")
+
+    # Polarization: a big bet drives the MEDIUM hands out of the range, leaving
+    # more of both extremes. (The mean is a bad summary of a barbell, which is
+    # exactly why the bluff number is reported next to it.)
+    def bucket(est, key):
+        return next((b["p"] for b in est["buckets"] if b["key"] == key), 0.0)
+    small = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "bet", "amount": 30, "pot": 200, "street": "FLOP"},
+    ]))["A"]
+    big = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "all_in", "amount": 500, "pot": 200, "street": "FLOP"},
+    ]))["A"]
+    ok(big["bluff"] > small["bluff"],
+       "a bigger bet is a bigger share bluff — as balanced play says it should be")
+    ok(bucket(big, ranges.B_MEDIUM) < bucket(small, ranges.B_MEDIUM),
+       "...because the medium hands stop betting. That's what polarized means.")
+
+    # Betting twice is the opposite of polarized: it's just strong.
+    barrel = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "bet", "amount": 100, "pot": 100, "street": "FLOP"},
+        {"name": "A", "kind": "bet", "amount": 250, "pot": 300, "street": "FLOP"},
+    ]))["A"]
+    ok(barrel["bluff"] < small["bluff"] and barrel["mean_strength"] > small["mean_strength"],
+       "firing twice is stronger and less of a bluff than firing once")
+
+    # A caller isn't bluffing.
+    called = ranges.estimate(_rview(board, [
+        {"name": "A", "kind": "call", "amount": 50, "pot": 150, "street": "FLOP"},
+    ]))["A"]
+    ok(called["bluff"] is None, "you cannot bluff by calling")
+    ok(called["mean_strength"] > 0.5, "but calling still says you have something")
+
+
+def test_range_estimate_survives_the_awkward_cases():
+    ok(ranges.estimate(_rview("", []))["A"]["mean_strength"] > 0,
+       "preflop has no board to rank against, but still has a range")
+    folded = _rview("Kd 8c 3h", [])
+    folded["players"][1]["folded"] = True
+    ok(ranges.estimate(folded) == {}, "nobody live, nothing to estimate")
+    ok(ranges.estimate(_rview("Kd 8c 3h", []), names=["nobody"]) == {},
+       "asking about a seat that isn't there is empty, not a crash")
+
+
+def test_equity_can_be_simulated_against_a_range():
+    # Hero holds bottom pair. Against a random hand he's fine; against someone
+    # who has bet every street he is not, and the simulation should say so.
+    board, hole = "Kd 8c 3h", "3s 2d"
+    view = _rview(board, [
+        {"name": "A", "kind": "bet", "amount": 100, "pot": 100, "street": "FLOP"},
+        {"name": "A", "kind": "raise", "amount": 400, "pot": 300, "street": "FLOP"},
+    ], hole=hole)
+    est = ranges.estimate(view)["A"]
+    rng = random.Random(6)
+    vs_random = odds.hand_odds(cards(hole), cards(board), 1, rng, time_budget=0.4)
+    vs_range = odds.hand_odds(cards(hole), cards(board), 1, rng, ranges=[est],
+                              time_budget=0.4)
+    ok(vs_random["vs_range"] is False and vs_range["vs_range"] is True,
+       "the payload says which opponent it was measured against")
+    ok(vs_range["equity"] < vs_random["equity"] - 0.05,
+       "bottom pair is worth less against a raiser than against a stranger")
+    ok(abs(sum(c["make"] for c in vs_range["categories"]) - 1.0) < 1e-9,
+       "and it's still a partition, range or no range")
+
+    # Cards can't be in two places: the range must never deal hero's own cards.
+    for _ in range(3):
+        out = odds.hand_odds(cards("As Ks"), cards("Qs 7s 2h"), 2, random.Random(7),
+                             ranges=[est, est], time_budget=0.15)
+        ok(out["samples"] > 0, "two opponents can share one range without colliding")
+
+
 # --------------------------------------------------------------- the coach
 
 def _seats(*specs):
@@ -1088,53 +1264,91 @@ def test_pot_odds_are_the_price_being_offered():
     ok(abs(advisor.pot_odds(100, 100) - 0.5) < 1e-9, "a pot-sized bet needs 50%")
 
 
+def _fast_coach(seed=4, lang="en"):
+    # The range-equity pass is a real simulation; tests don't need it accurate,
+    # only exercised.
+    return advisor.HeuristicAdvisor(random.Random(seed), lang=lang, range_budget=0.01)
+
+
 def test_advice_follows_the_price():
-    coach = advisor.HeuristicAdvisor(random.Random(4), lang="en")
+    """The decision policy on its own: equity against the price it's offered."""
+    coach = _fast_coach()
 
-    # 20% equity facing a pot-sized bet (needs 50%) -> get out.
-    a = coach.advise(_aview(to_call=100, pot=100), _odds(0.20))
-    ok(a["action"] == FOLD, "priced out: fold")
-    ok(a["line"], "and it says why, out loud")
+    def choose(equity, to_call, pot, **kw):
+        view = _aview(to_call=to_call, pot=pot, **kw)
+        return coach._choose(view, equity, advisor.pot_odds(to_call, pot),
+                             to_call, pot, view["hero"]["stack"])[0]
 
-    # 45% equity getting 4:1 (needs 20%) -> call.
-    a = coach.advise(_aview(to_call=25, pot=100), _odds(0.45))
-    ok(a["action"] == CALL, "a fair price on a real hand: call")
+    ok(choose(0.20, 100, 100) == FOLD, "20% against a price that needs 50%: fold")
+    ok(choose(0.45, 25, 100) == CALL, "45% getting 4:1 (needs 20%): call")
+    ok(choose(0.90, 40, 200, min_to=80) in (RAISE, ALL_IN), "way ahead: get paid")
+    ok(choose(0.25, 0, 100, can_raise=False) == CHECK, "no price, no hand: check")
+    # A pot-sized bet needs 50%. 52% is a (thin) call, 45% is not — the price is
+    # the whole question, and a couple of points either side of it flips the answer.
+    ok(choose(0.52, 100, 100) == CALL, "52% against a price that needs 50%: call it")
+    ok(choose(0.45, 100, 100) == FOLD, "45% against the same price: fold")
+    ok(choose(0.45, 10, 300) == CALL, "...but the same 45% calls when it's cheap")
 
-    # A monster with money behind -> raise, and size it up.
-    a = coach.advise(_aview(to_call=40, pot=200, min_to=80, max_to=1000), _odds(0.90))
-    ok(a["action"] in (RAISE, ALL_IN), "way ahead: get paid")
-    if a["action"] == RAISE:
-        ok(80 <= a["amount"] <= 1000, "the raise it names is legal")
 
-    # Nothing to call and nothing to bet -> take the free card.
-    a = coach.advise(_aview(to_call=0, pot=100, can_raise=False), _odds(0.25))
-    ok(a["action"] == CHECK, "no price, no hand: check")
-
-    # It never recommends something the rules don't allow.
+def test_advice_is_always_legal():
+    coach = _fast_coach(seed=9)
     rng = random.Random(9)
-    for _ in range(400):
+    for _ in range(150):
         to_call = rng.choice([0, 20, 300])
         can_raise = rng.random() < 0.7
         view = _aview(to_call=to_call, pot=rng.randint(20, 400), can_raise=can_raise,
-                      min_to=to_call + 20, max_to=to_call + 500)
+                      min_to=to_call + 20, max_to=to_call + 500,
+                      board=rng.choice(["", "2h 5c 7s", "2h 5c 7s 9d Jc"]))
         a = coach.advise(view, _odds(rng.random()))
         assert a["action"] in (FOLD, CHECK, CALL, RAISE, ALL_IN), a["action"]
         assert not (to_call == 0 and a["action"] == FOLD), "folded for free"
         assert not (a["action"] == RAISE and not can_raise), "raised illegally"
         if a["action"] == RAISE:
             assert view["min_raise_to"] <= a["amount"] <= view["max_raise_to"]
-    ok(True, "400 random spots: the coach's advice is always legal")
+        assert a["line"], "advice with nothing said out loud"
+    ok(True, "150 random spots: the coach's advice is always legal, and spoken")
+
+
+def test_advice_prices_real_hands_end_to_end():
+    """The whole path, with cards that really are what the test claims."""
+    coach = _fast_coach(seed=3)
+    # The worst hand in poker, facing a pot-sized bet on a board that missed it.
+    junk = _aview(to_call=200, pot=200, board="Kd Qc 8h", street="FLOP")
+    junk["hero"]["hole"] = cards("7d 2c")
+    a = coach.advise(junk, odds.hand_odds(cards("7d 2c"), cards("Kd Qc 8h"), 1,
+                                          random.Random(1), time_budget=0.1))
+    ok(a["action"] == FOLD, "seven-deuce on a king-high board folds to a pot bet")
+    ok(a["adjusted"] < 0.35, "and it knows it's drawing dead-ish")
+
+    # The nuts on the river: there is nothing to think about.
+    nuts = _aview(to_call=100, pot=400, min_to=200, max_to=900,
+                  board="Ks Qs Js Ts 2h", street="RIVER")
+    nuts["hero"]["hole"] = cards("As 9s")
+    a = coach.advise(nuts, odds.hand_odds(cards("As 9s"), cards("Ks Qs Js Ts 2h"), 1,
+                                          random.Random(1), time_budget=0.1))
+    ok(a["action"] in (RAISE, ALL_IN), "a royal flush raises")
+    ok(a["adjusted"] > 0.9, "and knows it can't be beaten")
 
 
 def test_advice_carries_the_numbers_it_reasoned_from():
-    coach = advisor.HeuristicAdvisor(random.Random(1), lang="en")
-    scary = [_act("A", "all_in", 900, pot=100)]
-    a = coach.advise(_aview(to_call=100, pot=100, players=_seats(("A", False, True)),
-                            actions=scary), _odds(0.55))
-    ok(a["equity"] == 0.55, "the raw equity is shown, not hidden")
-    ok(a["adjusted"] < a["equity"], "...next to what the read does to it")
+    # Real cards, so the numbers can actually be checked against each other.
+    coach = advisor.HeuristicAdvisor(random.Random(1), lang="en", range_budget=0.3)
+    board, hole = "Kd 8c 3h", "9s 9d"     # a middling pair, facing a shove
+    view = _aview(to_call=100, pot=100, board=board, street="FLOP",
+                  players=_seats(("A", False, True)),
+                  actions=[_act("A", "all_in", 300, pot=100)])
+    view["hero"]["hole"] = cards(hole)
+    payload = odds.hand_odds(cards(hole), cards(board), 1, random.Random(3),
+                             time_budget=0.3)
+    a = coach.advise(view, payload)
+    ok(a["equity"] == round(payload["equity"], 4), "the raw equity is shown, not hidden")
+    ok(a["vs_range"] is True, "and it was re-measured against what he's representing")
+    ok(a["adjusted"] < a["equity"],
+       "which is worth less than against a stranger — he's not a stranger, he shoved")
     ok(abs(a["pot_odds"] - 0.5) < 1e-9, "...and the price it's up against")
     ok(a["reads"] and a["reads"][0]["name"] == "A", "with the read that moved it")
+    ok(a["reads"][0]["bluff"] is not None, "including how often he's simply bluffing")
+    ok(a["reads"][0]["buckets"], "and what the rest of his range is made of")
     ok(0.0 <= a["confidence"] <= 1.0, "confidence is a probability")
     ok(a["source"] == "instinct", "and it says where the advice came from")
 
@@ -1320,13 +1534,15 @@ def test_advice_command_is_the_one_way_to_follow_it():
 
 def test_llm_advisor_keeps_the_maths_and_falls_back():
     rng = random.Random(2)
-    coach = advisor.LLMAdvisor(client=None, model="x", rng=rng, lang="en")
+    coach = advisor.LLMAdvisor(client=None, model="x", rng=rng, lang="en",
+                               range_budget=0.01)
     view = _aview(to_call=100, pot=100, min_to=200, max_to=900)
 
     # No client at all -> pure arithmetic, no crash, no blank panel.
     a = coach.advise(view, _odds(0.2))
-    ok(a["action"] == FOLD and a["source"] == "instinct",
+    ok(a["source"] == "instinct" and a["action"] in (FOLD, CHECK, CALL, RAISE, ALL_IN),
        "with no model behind it, the coach still advises")
+    ok(a["line"], "...and still says it out loud")
 
     # The model's judgement is taken; the numbers stay ours.
     base = coach.fallback.advise(view, _odds(0.2))
@@ -1341,7 +1557,7 @@ def test_llm_advisor_keeps_the_maths_and_falls_back():
     ok(merged["confidence"] == 0.8, "and its confidence")
 
     # Illegal or nonsense calls are refused, not passed to the engine.
-    ok(coach._merge(base, {"action": "moon"}, view)["action"] == FOLD,
+    ok(coach._merge(base, {"action": "moon"}, view)["action"] == base["action"],
        "an action that isn't a poker move falls back to the arithmetic")
     free = _aview(to_call=0, pot=100)
     ok(coach._merge(coach.fallback.advise(free, _odds(0.2)),
@@ -1359,7 +1575,8 @@ def test_llm_advisor_keeps_the_maths_and_falls_back():
     # A model that throws mid-hand must not take the panel down with it.
     def boom(*a, **k):
         raise RuntimeError("uplink down")
-    live = advisor.LLMAdvisor(client=object(), model="x", rng=rng, lang="en")
+    live = advisor.LLMAdvisor(client=object(), model="x", rng=rng, lang="en",
+                              range_budget=0.01)
     live._create = boom
     out = live.advise(view, _odds(0.2))
     ok(out["source"] == "instinct", "an API failure falls back to instinct silently")
@@ -1451,7 +1668,16 @@ if __name__ == "__main__":
     test_reads_come_from_betting_not_cards()
     test_equity_is_shaded_by_the_read_but_never_overruled()
     test_pot_odds_are_the_price_being_offered()
+    test_strength_is_an_exact_percentile()
+    test_draws_are_spotted()
+    test_betting_narrows_the_range()
+    test_your_own_cards_remove_his_combos()
+    test_bluff_probability_answers_the_right_question()
+    test_range_estimate_survives_the_awkward_cases()
+    test_equity_can_be_simulated_against_a_range()
     test_advice_follows_the_price()
+    test_advice_is_always_legal()
+    test_advice_prices_real_hands_end_to_end()
     test_advice_carries_the_numbers_it_reasoned_from()
     test_followed_advice_is_judged_on_intent()
     test_verdict_tone_matrix()

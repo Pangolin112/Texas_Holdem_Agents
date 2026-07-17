@@ -27,6 +27,7 @@ import random
 import time
 from itertools import product
 
+from . import ranges as ranges_mod
 from .cards import Card, RANK_VALUES, SUITS
 from .evaluator import (CATEGORY_NAMES, best_hand, hand_name, rank_cards,
                         starting_hand)
@@ -38,13 +39,23 @@ TIME_BUDGET = 0.22   # seconds; the player is waiting on this
 
 
 def hand_odds(hole, board, opponents, rng=None, max_samples=MAX_SAMPLES,
-              time_budget=TIME_BUDGET):
-    """Equity and per-category chances for `hole` against `opponents` unknown
-    hands. Returns a JSON-safe dict (see module docstring)."""
+              time_budget=TIME_BUDGET, ranges=None):
+    """Equity and per-category chances for `hole` against `opponents` hands.
+
+    By default the opponents are dealt at random, which is the number every
+    published equity is quoted against and the honest baseline when you know
+    nothing. Pass `ranges` (a list of estimates from holdem/ranges.py, one per
+    opponent) and each rollout instead deals them a hand drawn from what their
+    betting says they have — the same simulation, against real opponents rather
+    than strangers.
+
+    Returns a JSON-safe dict (see module docstring).
+    """
     rng = rng if rng is not None else random.Random()
     hole = list(hole)
     board = list(board)
     opponents = max(1, int(opponents))
+    ranges = list(ranges) if ranges else None
 
     known = set(hole) | set(board)
     deck = [c for c in FULL_DECK if c not in known]
@@ -78,18 +89,36 @@ def hand_odds(hole, board, opponents, rng=None, max_samples=MAX_SAMPLES,
         # Checking the clock every rollout would cost more than the rollout.
         if samples % 128 == 0 and samples and time.monotonic() > deadline:
             break
-        drawn = sample(deck, need)
-        full_board = board + drawn[:need_board]
+        if ranges is None:
+            drawn = sample(deck, need)
+            full_board = board + drawn[:need_board]
+            hands = [(drawn[i], drawn[i + 1])
+                     for i in range(need_board, need, 2)]
+        else:
+            # Deal the opponents from their ranges FIRST, then run the board out
+            # of what's left — otherwise a range could want a card the river
+            # already took.
+            used = set(hole) | set(board)
+            hands = []
+            for k in range(opponents):
+                pair = None
+                if k < len(ranges) and ranges[k]:
+                    pair = ranges_mod.sample_hand(ranges[k], used, rng)
+                if pair is None:   # no range, or it couldn't find a free combo
+                    pair = tuple(sample([c for c in deck if c not in used], 2))
+                used.update(pair)
+                hands.append(pair)
+            left = [c for c in deck if c not in used]
+            full_board = board + (sample(left, need_board) if need_board else [])
+
         hero = rank_cards(hole + full_board)
         cat = hero[0]
         make_counts[cat] = make_counts.get(cat, 0) + 1
 
         tied = 0
         beaten = False
-        i = need_board
-        for _ in range(opponents):
-            opp = rank_cards([drawn[i], drawn[i + 1]] + full_board)
-            i += 2
+        for pair in hands:
+            opp = rank_cards([pair[0], pair[1]] + full_board)
             if opp > hero:
                 beaten = True   # one better hand is enough — stop ranking
                 break
@@ -127,6 +156,7 @@ def hand_odds(hole, board, opponents, rng=None, max_samples=MAX_SAMPLES,
         "tie": ties / float(samples),
         "lose": (samples - wins - ties) / float(samples),
         "equity": equity / float(samples),
+        "vs_range": ranges is not None,
         "categories": categories,
         # No unknown board cards left: the only thing simulated is which hands
         # the opponents hold, so hero's own category is already decided.

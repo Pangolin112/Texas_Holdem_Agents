@@ -413,6 +413,12 @@ ADVICE_VERBS = {
     "raise": "RAISE", "all_in": "ALL-IN",
 }
 
+# What his range is made of, in the order holdem/ranges.py buckets it.
+BUCKET_LABELS = {
+    "strong": "strong", "medium": "medium", "draw": "draws",
+    "weak": "weak", "air": "air",
+}
+
 
 def advice(payload):
     """The coach's call on the spot in front of you: what the table looks like,
@@ -435,13 +441,23 @@ def advice(payload):
         note = read["note"] or READ_LABELS.get(read["key"], read["key"])
         bar = "█" * int(round(read["strength"] * 10))
         out("   %s %s %s" % (_pad(read["name"], 14), _c(C.RED, _pad(bar, 10)), dim(note)))
+        if read.get("buckets"):
+            shape = "  ".join("%s %.0f%%" % (BUCKET_LABELS.get(b["key"], b["key"]),
+                                             b["p"] * 100)
+                              for b in read["buckets"])
+            line = "   %s %s" % (" " * 14, dim(shape))
+            if read.get("bluff") is not None:
+                line += _c(C.MAGENTA, "   bluffing %.0f%%" % (read["bluff"] * 100))
+            out(line)
+    against = ("what they're representing" if payload.get("vs_range")
+               else "the read")
     if payload["to_call"] > 0:
-        out(dim("   you win %.0f%% (%.0f%% after the read) · the price needs %.0f%%"
-                % (payload["equity"] * 100, payload["adjusted"] * 100,
+        out(dim("   you win %.0f%% vs random · %.0f%% vs %s · the price needs %.0f%%"
+                % (payload["equity"] * 100, payload["adjusted"] * 100, against,
                    payload["pot_odds"] * 100)))
     else:
-        out(dim("   you win %.0f%% (%.0f%% after the read) · nothing to call"
-                % (payload["equity"] * 100, payload["adjusted"] * 100)))
+        out(dim("   you win %.0f%% vs random · %.0f%% vs %s · nothing to call"
+                % (payload["equity"] * 100, payload["adjusted"] * 100, against)))
     out("   %s  %s" % (_c(C.YELLOW, bold(verb)), payload["line"]))
     if payload.get("reasoning"):
         out(dim("   " + payload["reasoning"]))

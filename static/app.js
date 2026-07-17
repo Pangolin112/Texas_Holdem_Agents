@@ -94,8 +94,11 @@ const I18N = {
     coach_title: "AI Coach",
     coach_thinking: "reading the table…",
     coach_sure: "{p} sure",
-    coach_math: "you win {e} → {a} after the read · the price needs {o}",
-    coach_math_free: "you win {e} → {a} after the read · nothing to call",
+    coach_math: "you win {e} vs random · {a} vs their range · the price needs {o}",
+    coach_math_free: "you win {e} vs random · {a} vs their range · nothing to call",
+    coach_bluff: "bluffing {p}",
+    bucket_strong: "strong", bucket_medium: "medium", bucket_draw: "draws",
+    bucket_weak: "weak", bucket_air: "air",
     follow_ai: "Follow the coach",
     auto_coach: "Follow the coach this street",
     auto_on_auto_advisor: "armed — doing whatever the coach says this street (click again to cancel)",
@@ -189,8 +192,11 @@ const I18N = {
     coach_title: "AI 教练",
     coach_thinking: "正在读牌桌……",
     coach_sure: "把握 {p}",
-    coach_math: "胜率 {e} → 读牌后 {a} · 这个价格需要 {o}",
-    coach_math_free: "胜率 {e} → 读牌后 {a} · 不用跟注",
+    coach_math: "对随机牌胜率 {e} · 对他们的范围 {a} · 这个价格需要 {o}",
+    coach_math_free: "对随机牌胜率 {e} · 对他们的范围 {a} · 不用跟注",
+    coach_bluff: "诈唬 {p}",
+    bucket_strong: "成牌", bucket_medium: "中等", bucket_draw: "听牌",
+    bucket_weak: "很弱", bucket_air: "空气",
     follow_ai: "遵循 AI",
     auto_coach: "本轮跟随 AI",
     auto_on_auto_advisor: "已预约：本轮听教练的（再点一次取消）",
@@ -894,6 +900,18 @@ function readText(r) {
   return r.note || t("read_" + r.key);
 }
 
+/* What his range is made of, as one stacked bar. The segments are a partition
+ * of every hand he can hold, so the bar is always exactly full. */
+function rangeBar(r) {
+  if (!r.buckets || !r.buckets.length) return "";
+  const segs = r.buckets.map((b) =>
+    `<i class="b-${esc(b.key)}" style="width:${(b.p * 100).toFixed(1)}%" ` +
+    `title="${esc(t("bucket_" + b.key))} ${pct(b.p)}"></i>`).join("");
+  const keys = r.buckets.filter((b) => b.p >= 0.08).map((b) =>
+    `<span class="k-${esc(b.key)}">${esc(t("bucket_" + b.key))} ${pct(b.p)}</span>`).join("");
+  return `<div class="range-bar">${segs}</div><div class="range-keys">${keys}</div>`;
+}
+
 function renderCoach() {
   const el = $("coach");
   const s = G.state;
@@ -933,16 +951,20 @@ function renderCoach() {
   $("coach-line").textContent = a.line || "";
   $("coach-why").textContent = a.reasoning || "";
   $("coach-why").classList.toggle("hidden", !a.reasoning);
-  // Name and bar on one line, the read itself on its own line below it — this
-  // is the range call, so it wraps in full rather than getting an ellipsis.
-  $("coach-reads").innerHTML = (a.reads || []).map((r) =>
-    `<div class="read-row">` +
+  // Name and bar on one line, then the read, then what his range is actually
+  // made of. This is the range call, so it wraps in full rather than truncating.
+  $("coach-reads").innerHTML = (a.reads || []).map((r) => {
+    const bluff = r.bluff === null || r.bluff === undefined ? ""
+      : `<span class="read-bluff">${t("coach_bluff", { p: pct(r.bluff) })}</span>`;
+    return `<div class="read-row">` +
       `<div class="read-top">` +
-        `<span class="read-name">${esc(r.name)}</span>` +
+        `<span class="read-name">${esc(r.name)}</span>${bluff}` +
         `<span class="read-bar"><i style="width:${Math.round(r.strength * 100)}%"></i></span>` +
       `</div>` +
       `<div class="read-note">${esc(readText(r))}</div>` +
-    `</div>`).join("");
+      rangeBar(r) +
+    `</div>`;
+  }).join("");
   $("coach-math").textContent = a.to_call > 0
     ? t("coach_math", { e: pct(a.equity), a: pct(a.adjusted), o: pct(a.pot_odds) })
     : t("coach_math_free", { e: pct(a.equity), a: pct(a.adjusted) });

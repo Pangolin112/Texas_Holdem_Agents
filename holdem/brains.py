@@ -392,6 +392,31 @@ class PolicyBrain(Brain, ABC):
                    "was comfortable with — not a random punt." % (style, loose)))
 
 
+def preflop_strength(hole: list[Card]) -> float:
+    """How good two cards look before any board, in [0, 1].
+
+    A cheap stand-in for real preflop equity: pairs, high cards, suitedness and
+    connectedness. Shared with holdem/ranges.py, which needs to score a
+    thousand candidate holdings per opponent and can't afford to simulate each.
+    """
+    a, b = sorted((c.value for c in hole), reverse=True)
+    if a == b:
+        return 0.50 + (a - 2) / 24.0  # 22 ≈ 0.50 ... AA = 1.0
+    s = (a + b) / 27.0 * 0.42
+    if hole[0].suit == hole[1].suit:
+        s += 0.07
+    gap = a - b
+    if gap == 1:
+        s += 0.06
+    elif gap == 2:
+        s += 0.03
+    if a >= 11 and b >= 11:
+        s += 0.12
+    elif a == 14:
+        s += 0.05
+    return min(s, 0.95)
+
+
 class HeuristicBrain(PolicyBrain):
     """The default offline seat. Its whole character is two hand-tuned scalars,
     `aggression` and `looseness`, that weight how it reads its hand and how it
@@ -401,22 +426,7 @@ class HeuristicBrain(PolicyBrain):
     # -- strength estimation ------------------------------------------------
 
     def _preflop_strength(self, hole: list[Card]) -> float:
-        a, b = sorted((c.value for c in hole), reverse=True)
-        if a == b:
-            return 0.50 + (a - 2) / 24.0  # 22 ≈ 0.50 ... AA = 1.0
-        s = (a + b) / 27.0 * 0.42
-        if hole[0].suit == hole[1].suit:
-            s += 0.07
-        gap = a - b
-        if gap == 1:
-            s += 0.06
-        elif gap == 2:
-            s += 0.03
-        if a >= 11 and b >= 11:
-            s += 0.12
-        elif a == 14:
-            s += 0.05
-        return min(s, 0.95)
+        return preflop_strength(hole)
 
     def _strength(self, hole: list[Card], board: list[Card]) -> float:
         if not board:

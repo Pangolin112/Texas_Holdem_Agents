@@ -211,6 +211,23 @@ sums to the total**. When you're drawing at several things at once — a flush,
 trips, a straight — this is what tells you which of them is actually carrying
 your equity and where you really stand.
 
+> **"Aren't those overlapping? You can't just add draws together."** Right — and
+> it doesn't. This is the classic outs-counting trap: with 9♠8♠ on 7♠6♥2♠K♦ you
+> have 9 spades for the flush and 8 cards for the straight, and *17 outs* is
+> wrong, because 5♠ and 10♠ do both. The real answer is 15.
+>
+> Nothing here counts outs. Each simulated runout is classified by the **one
+> final hand it actually ends with** — a 5♠ river makes both a flush and a
+> straight, so it books as a flush, once, and never as a straight. The rows are
+> mutually exclusive by construction, which is precisely *why* they add up. In
+> that spot the table reports Flush 18.9% + Straight 13.0% = 31.8%, not the
+> naive 38.6%. Checked against a brute-force enumeration of all 45,540
+> (river × opponent hand) combinations: **47.17% exact vs 46.78% simulated**,
+> with the make column summing to 1.0 and the win column to the equity, exactly.
+> One consequence worth knowing: *Straight 13%* means "ends up a straight and
+> nothing better" — the runouts where you make a straight *and* a flush are
+> counted under Flush.
+
 The numbers come from a Monte-Carlo simulation (`holdem/odds.py`): every rollout
 deals the missing board and each live opponent's hole cards from the genuinely
 unknown cards, ranks everyone, and books the result under the category you ended
@@ -235,18 +252,60 @@ tells you what to do, and then it has to live with it.
    'ai' to do it · 'aa' to follow the coach all street
 ```
 
-**It reads opponents from their betting, never from their cards.** It is not
-allowed to see anyone's hole cards, and doesn't: a seat that has raised twice is
-representing a narrow, strong range; one that has called along is wide and weak.
-That read is built from the structured action log, so it only ever knows what
-you know.
+**It reads opponents from their betting, never from their cards** (`ranges.py`).
+It is not allowed to see anyone's hole cards, and doesn't. Instead it starts
+from every hand each opponent could still hold and lets each thing they did move
+the odds on each of them:
 
-**The read is what turns equity into advice.** `odds.py` says how often you win
-against *random* hands — but nobody plays random hands, and a seat betting into
-you is not random. So the read discounts your raw equity (by at most a third; a
-read is a correction, not a second opinion), and the *discounted* number is what
-gets compared to the price you're being offered. Call when it beats the pot
-odds, fold when it doesn't, raise when you're far enough ahead to get paid.
+```
+P(hand | what they did)  ∝  P(hand) × ∏ P(each action | that hand)
+```
+
+The prior is flat over every two-card combination not already accounted for —
+the board, and **your own cards**, which is why holding the A♠ genuinely does
+make his flush less likely. Strength is exact, not estimated: with the board
+known, "how good is this holding" is just where it ranks among all the others,
+which is a count. Each action is judged against the board *as it was at the
+time* — a bet on the flop says something about a flop hand, not a river one.
+
+The only opinion in the file is the likelihood, and it encodes one idea instead
+of a pile of thresholds: **betting is polarized** (strong hands *and* hands with
+nothing, since those can't win any other way), **calling is condensed** (good,
+not good enough to raise). Run it over every holding and the posterior *is* the
+range:
+
+| he... | mean | bluff | his range |
+|---|---|---|---|
+| has done nothing | 50% | — | air 30% · weak 26% · medium 25% · strong 20% |
+| checked | 45% | — | strong drops to 9% |
+| called a bet | 59% | — | **medium 48%** — condensed, as theory says |
+| bet ¼ pot | 62% | **28%** | strong 44% · medium 24% · air 28% |
+| bet pot | 61% | **32%** | strong 48% · medium 18% · air 32% |
+| shoved 4x pot | 59% | **37%** | strong 51% · **medium 10%** · air 37% |
+| bet flop, barrelled turn | 71% | **24%** | strong 67% |
+
+Read the bottom rows: as the bet grows the **medium hands drain out** (24% → 10%)
+and *both* ends grow. That's what polarized means, and it's why the bluff number
+rises with bet size — landing near where balanced play says it should (about a
+third of a pot-sized bet). Fire twice, though, and you're just strong.
+
+**Bluff % is only quoted for someone who is betting** — you cannot bluff by
+calling — and it's the posterior weight sitting on hands that can't currently
+beat anything. Draws are counted separately as semi-bluffs.
+
+**Then equity gets re-measured against those ranges, not against strangers.**
+The panel's headline number is your equity against *random* hands, which is the
+right baseline and the wrong opponent. Given a posterior for each live seat, the
+coach re-runs the same simulation dealing them hands **drawn from their ranges**
+(`odds.hand_odds(..., ranges=...)`) — a real number, not a fudge factor. That
+second number is what meets the pot odds:
+
+```
+you win 47% vs random · 38% vs their range · the price needs 30%   ->  CALL
+```
+
+Call when it beats the price, fold when it doesn't, raise when you're far enough
+ahead to get paid.
 
 **One click to follow it.** The **Follow the coach** button says what it will
 do — *Follow the coach · Raise to 620* — so it's never a leap of faith. Or arm
@@ -364,6 +423,7 @@ holdem/                shared core — no front-end code
   cards.py             deck + cards
   evaluator.py         best 5-card hand, side-pot ranking, fast 7-card ranker
   odds.py              Monte-Carlo equity + per-category chances (your seat only)
+  ranges.py            Bayesian read of what each opponent holds, and bluff %
   advisor.py           the coach: reads opponents, advises, owns the result
   brains.py            LLM + heuristic decision-making (the personalities)
   players.py           human + AI seats (incl. the autopilot commitments)
@@ -411,3 +471,9 @@ wrong:
   draw completes 1 − (38/47)(37/46) = 35.0%), with the invariants checked too:
   make% covers every runout exactly once, and the per-category win column sums
   to total equity.
+- **The ranges.** Strength is asserted to be a real percentile (the average
+  holding is 0.5 *by construction*, so a seat that has done nothing reads as
+  exactly average). The rest are properties rather than magic numbers: betting
+  raises the read, checking lowers it, calling condenses it, a bigger bet
+  polarizes it, your own cards are removed from his combos, a folded seat is
+  never read, and you can't bluff by calling.

@@ -33,9 +33,13 @@ import random
 import re
 from typing import Any, Optional
 
-from . import ui
+from . import odds, ranges, ui
 from .brains import ModelCaller, _lang_note
 from .players import ALL_IN, CALL, CHECK, FOLD, RAISE, advice_action  # noqa: F401
+
+# Re-simulating against their ranges is a second pass over the same maths, so
+# it gets a shorter clock than the headline number.
+RANGE_EQUITY_BUDGET = 0.18
 
 # The coach's identity: a name for the voice/TTS lookup, and a style the model
 # is asked to write in. Front-ends title the panel themselves (localized), so
@@ -80,12 +84,15 @@ TONE_HUMBLED = "humbled"        # it was wrong, and has to wear it
 TONE_SHRUG = "shrug"            # nothing to crow about either way
 
 
-def read_opponents(players, actions, street):
+def read_opponents(players, actions, street, estimates=None):
     """What each live opponent's betting says about their hand.
 
-    Reads only the action log — no hole cards. Returns one row per opponent
-    still in the hand, strongest-looking first.
+    The label ("he's raised twice") is a caption; the numbers underneath come
+    from holdem/ranges.py, which works out an actual posterior over every hand
+    he can hold — including how much of it is air, which is the bluff number.
+    Reads only the action log and the board. Never a hole card.
     """
+    estimates = estimates or {}
     reads = []
     for info in players:
         if info["is_hero"] or info["folded"]:
@@ -117,9 +124,13 @@ def read_opponents(players, actions, street):
         else:
             key = READ_QUIET
 
-        strength = READ_STRENGTH[key]
-        # A big raise is worth more than a min-click; nudge, don't leap.
-        strength = min(0.92, strength + 0.06 * min(2.0, heat))
+        est = estimates.get(info["name"])
+        if est is not None:
+            strength = est["mean_strength"]
+        else:
+            # No posterior (no board to rank against, say) — fall back to what
+            # the label alone implies.
+            strength = min(0.92, READ_STRENGTH[key] + 0.06 * min(2.0, heat))
         reads.append({
             "name": info["name"],
             "key": key,
@@ -127,10 +138,20 @@ def read_opponents(players, actions, street):
             "raises": len(raises),
             "calls": len(calls),
             "heat": round(heat, 2),
+            "bluff": None if est is None else _round(est["bluff"]),
+            "semi_bluff": None if est is None else _round(est["semi_bluff"]),
+            "buckets": [] if est is None else [
+                {"key": b["key"], "p": round(b["p"], 3)}
+                for b in est["buckets"] if b["p"] >= 0.005],
+            "combos": None if est is None else len(est["combos"]),
             "note": None,   # the LLM advisor fills this in, in the table language
         })
     reads.sort(key=lambda r: -r["strength"])
     return reads
+
+
+def _round(x):
+    return None if x is None else round(x, 3)
 
 
 def threat_level(reads):
@@ -197,20 +218,23 @@ def followed_advice(advice, action):
 
 
 class HeuristicAdvisor:
-    """Equity against the price, shaded by the read. No API, no waiting."""
+    """Your equity against their range, against the price. No API, no waiting."""
 
     is_llm = False
 
-    def __init__(self, rng, lang="en"):
+    def __init__(self, rng, lang="en", range_budget=RANGE_EQUITY_BUDGET):
         self.rng = rng
         self.lang = lang
+        self.range_budget = range_budget
 
     # -- the recommendation ------------------------------------------------
 
     def advise(self, view, odds_payload):
         equity = float(odds_payload["equity"])
-        reads = read_opponents(view["players"], view["actions"], view["street"])
-        adjusted = discount_equity(equity, reads)
+        estimates = ranges.estimate(view)
+        reads = read_opponents(view["players"], view["actions"], view["street"],
+                               estimates)
+        adjusted, exact = self._against_their_range(view, equity, estimates)
         to_call = view["to_call"]
         pot = view["pot"]
         price = pot_odds(to_call, pot)
@@ -230,6 +254,7 @@ class HeuristicAdvisor:
             "adjusted": round(adjusted, 4),
             "pot_odds": round(price, 4),
             "threat": round(threat_level(reads), 3),
+            "vs_range": exact,
             "to_call": to_call,
             "pot": pot,
             "reads": reads,
@@ -237,6 +262,28 @@ class HeuristicAdvisor:
             "reasoning": None,
             "source": "instinct",
         }
+
+    def _against_their_range(self, view, equity, estimates):
+        """Your equity against what they're actually representing.
+
+        `equity` is measured against random hands, which is the right baseline
+        and the wrong opponent. Given a posterior for each live seat we can just
+        re-run the same simulation dealing them hands from their ranges — a real
+        number rather than a fudge factor. Returns (equity, was_it_simulated);
+        with no posterior to work from it falls back to shading the raw number.
+        """
+        live = [p["name"] for p in view["players"]
+                if not p["is_hero"] and not p["folded"]]
+        mine = [estimates.get(n) for n in live]
+        if not live or not all(mine):
+            return discount_equity(equity, read_opponents(
+                view["players"], view["actions"], view["street"], estimates)), False
+        out = odds.hand_odds(view["hero"]["hole"], view["board"], len(live),
+                             self.rng, ranges=mine,
+                             time_budget=self.range_budget)
+        if out is None:
+            return equity, False
+        return out["equity"], True
 
     def _choose(self, view, adjusted, price, to_call, pot, stack):
         can_raise = view["can_raise"]
@@ -407,11 +454,12 @@ class LLMAdvisor(ModelCaller):
 
     is_llm = True
 
-    def __init__(self, client, model, rng, lang="en"):
+    def __init__(self, client, model, rng, lang="en",
+                 range_budget=RANGE_EQUITY_BUDGET):
         super().__init__(client, model)
         self.rng = rng
         self.lang = lang
-        self.fallback = HeuristicAdvisor(rng, lang)
+        self.fallback = HeuristicAdvisor(rng, lang, range_budget)
         self._warned = False
 
     def advise(self, view, odds_payload):
@@ -568,31 +616,48 @@ def build_advice_prompt(view, odds_payload, base):
             % (c["name"], c["make"] * 100, c["win"] * 100) for c in outs[:5]))
 
     lines.append("")
-    lines.append("What each live opponent has DONE this hand:")
-    lines.append(format_actions(view["actions"], view["players"]))
+    lines.append("What each live opponent has DONE this hand, and what a Bayesian "
+                 "read of it says they hold:")
+    lines.append(format_actions(view["actions"], view["players"], base["reads"]))
     lines.append("")
-    lines.append("Your own arithmetic says: %s%s (equity %.0f%% shaded to %.0f%% for how "
-                 "they're betting, versus a %.0f%% price)."
+    if base.get("vs_range"):
+        lines.append("Against random hands they win %.0f%%. Re-simulated against the "
+                     "ranges above — the hands these opponents are actually "
+                     "representing — they win %.0f%%. That second number is the real one."
+                     % (base["equity"] * 100, base["adjusted"] * 100))
+    else:
+        lines.append("They win %.0f%% against random hands (%.0f%% once the read is "
+                     "taken into account)." % (base["equity"] * 100, base["adjusted"] * 100))
+    lines.append("Your own arithmetic says: %s%s, against a %.0f%% price."
                  % (base["action"],
                     (" to %d" % base["amount"]) if base["amount"] else "",
-                    base["equity"] * 100, base["adjusted"] * 100, base["pot_odds"] * 100))
-    lines.append("Agree or overrule it, but decide. Respond with the JSON object only.")
+                    base["pot_odds"] * 100))
+    lines.append("Agree or overrule it, but decide. The range percentages above are "
+                 "yours to interpret, not to repeat — say what they mean. Respond with "
+                 "the JSON object only.")
     return "\n".join(lines)
 
 
-def format_actions(actions, players):
+def format_actions(actions, players, reads=None):
+    reads = {r["name"]: r for r in (reads or [])}
     live = {p["name"] for p in players if not p["is_hero"] and not p["folded"]}
     rows = []
     for info in players:
         if info["is_hero"]:
             continue
         mine = [a for a in actions if a["name"] == info["name"]]
-        if not mine:
-            continue
-        moves = ", ".join("%s: %s" % (a["street"].lower(), a["desc"]) for a in mine)
         state = "still in" if info["name"] in live else "FOLDED"
+        moves = (", ".join("%s: %s" % (a["street"].lower(), a["desc"]) for a in mine)
+                 or "nothing yet")
         rows.append("- %s (%s, stack %d): %s"
                     % (info["name"], state, info["stack"], moves))
+        read = reads.get(info["name"])
+        if read and read.get("buckets"):
+            shape = ", ".join("%.0f%% %s" % (b["p"] * 100, b["key"]) for b in read["buckets"])
+            row = "    range now: %s" % shape
+            if read.get("bluff") is not None:
+                row += "  ->  bluffing about %.0f%% of the time" % (read["bluff"] * 100)
+            rows.append(row)
     return "\n".join(rows) or "- (nobody has acted yet)"
 
 
