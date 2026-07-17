@@ -4,7 +4,7 @@ import random
 import re
 import threading
 
-from . import evaluator, odds, ui
+from . import advisor, evaluator, odds, ui
 from .cards import Deck
 from .players import Action, ALL_IN, CALL, CHECK, FOLD, RAISE
 
@@ -35,7 +35,7 @@ def looks_like_move_question(text):
 
 class TexasHoldemGame:
     def __init__(self, players, sb=10, bb=20, rng=None, interactive=True,
-                 reveal_all=False, language="en", show_odds=True):
+                 reveal_all=False, language="en", show_odds=True, advisor=None):
         self.players = list(players)  # seat order; only players with chips
         self.sb = sb
         self.bb = bb
@@ -44,6 +44,9 @@ class TexasHoldemGame:
         self.reveal_all = reveal_all  # peek mode: show every hand once it's over
         self.language = language      # what the agents speak ("en" / "zh")
         self.show_odds = show_odds    # live equity read for the human seat
+        # The coach behind the player's chair (holdem/advisor.py), or None for
+        # nobody. It needs the equity numbers, so it can't work without them.
+        self.advisor = advisor if show_odds else None
         self.starting_stack = players[0].stack if players else 0
         self.button_idx = 0
         self.hand_no = 0
@@ -67,6 +70,10 @@ class TexasHoldemGame:
         self.hand_live = False
         self.shown = set()          # names whose hole cards went public this hand
         self.hand_winnings = {}     # name -> chips collected this hand
+        self.hand_actions = []      # structured moves this hand (the coach's evidence)
+        self.hero_advice = None     # the coach's call on the spot in front of us
+        self.advice_log = []        # every call it made this hand, and what we did
+        self.hero_odds_payload = None
         self._odds_cache = {}       # (hole, board, live opponents) -> odds payload
         self._odds_shown = None     # last key handed to the front-end
 
@@ -406,6 +413,10 @@ class TexasHoldemGame:
         self.revealed = False
         self.shown = set()
         self.hand_winnings = {}
+        self.hand_actions = []
+        self.hero_advice = None
+        self.advice_log = []
+        self.hero_odds_payload = None
         self._odds_cache = {}
         self._odds_shown = None
         self.hand_players = list(self.players)
@@ -462,6 +473,7 @@ class TexasHoldemGame:
             else:
                 self.showdown()
         self.show_hand_result()
+        self.advisor_verdict()   # the coach finds out whether it was right
 
     def new_street(self):
         for p in self.hand_players:
@@ -506,8 +518,121 @@ class TexasHoldemGame:
             if payload is None:
                 return
             self._odds_cache[key] = payload
+        # Kept even when the read hasn't changed: the advisor needs the numbers
+        # every time it's asked, not just when they're worth re-announcing.
+        self.hero_odds_payload = payload
+        if key == self._odds_shown:
+            return
         self._odds_shown = key
         ui.hero_odds(payload)
+
+    # ------------------------------------------------------------ the coach
+
+    def update_hero_advice(self, view):
+        """Ask the coach to call this exact spot, and show what it says.
+
+        Returns the advice so the turn can act on it (the follow button, the
+        autopilot) and so we can tell afterwards whether it was taken.
+        """
+        if self.advisor is None or self.hero_odds_payload is None:
+            return None
+        advice = self.advisor.advise(view, self.hero_odds_payload)
+        if advice is None:
+            return None
+        # Carry the command that enacts it, so the follow button, the autopilot
+        # and the terminal can't drift into following it three different ways.
+        advice["command"] = advisor.advice_command(advice)
+        self.hero_advice = advice
+        self.advice_log.append({"street": self.street, "advice": advice,
+                                "action": None, "desc": None, "followed": None})
+        ui.advice(advice)
+        return advice
+
+    def note_hero_move(self, view, action, desc):
+        """Record what the player actually did against what they were told —
+        and if they went their own way, let the coach say so now rather than
+        pretend it didn't notice."""
+        if not self.advice_log:
+            return
+        entry = self.advice_log[-1]
+        if entry["action"] is not None:
+            return  # this advice has already been answered
+        advice = entry["advice"]
+        entry["action"] = action
+        entry["desc"] = desc
+        entry["followed"] = advisor.followed_advice(advice, action)
+        if entry["followed"] or self.advisor is None:
+            return
+        line = self.advisor.on_defiance(advice, action, view)
+        if line:
+            ui.advisor_line(line, "defiance")
+
+    def advisor_verdict(self):
+        """The hand is over: the coach finds out whether it was right, and has
+        to say so out loud."""
+        if self.advisor is None or not self.advice_log:
+            return
+        context = self.verdict_context(self.advice_log[-1])
+        if context is None:
+            return
+        tone, line = self.advisor.verdict(context)
+        if line:
+            ui.advisor_verdict(line, tone, context)
+
+    def shown_ranks(self):
+        """Hands the human could legitimately work out for themselves: the ones
+        that were actually shown (plus everything, in peek mode). The coach
+        judges itself on what the table saw — never on the mucked cards."""
+        out = {}
+        if len(self.board) < 5:
+            return out
+        for p in self.hand_players:
+            if not p.hole:
+                continue
+            if self.reveal_all or p.name in self.shown:
+                out[p.name] = evaluator.best_hand(p.hole + self.board)[0]
+        return out
+
+    def verdict_context(self, entry):
+        human = self.human
+        if human is None or not human.hole:
+            return None
+        net = self.hand_winnings.get(human.name, 0) - human.committed
+        told_fold = entry["advice"]["action"] == FOLD
+
+        hero_rank = None
+        if len(human.hole) + len(self.board) >= 5:
+            hero_rank = evaluator.best_hand(human.hole + self.board)[0]
+        others = {n: r for n, r in self.shown_ranks().items() if n != human.name}
+        would_have_won = None
+        if hero_rank is not None and others:
+            would_have_won = hero_rank >= max(others.values())
+
+        # Was the advice right? Judged on what actually happened, which is what
+        # a player wants from a coach — not on whether it was +EV in theory.
+        if human.folded:
+            # Nobody showed anything, so nobody gets to claim they were right.
+            right = None if would_have_won is None else (
+                (not would_have_won) if told_fold else would_have_won)
+        elif net > 0:
+            right = not told_fold
+        elif net < 0:
+            right = told_fold
+        else:
+            right = None
+
+        return {
+            "followed": bool(entry["followed"]),
+            "advice": entry["advice"],
+            "action_desc": entry["desc"] or "did nothing",
+            "net": net,
+            "right": right,
+            "folded": human.folded,
+            "would_have_won": would_have_won,
+            "hero_hand": evaluator.hand_name(hero_rank) if hero_rank else None,
+            "winner_hand": (evaluator.hand_name(max(others.values()))
+                            if others else None),
+        }
 
     # ------------------------------------------------------ the finished hand
 
@@ -580,10 +705,17 @@ class TexasHoldemGame:
             if p.is_human:
                 # Folds since the last look change what you're up against.
                 self.update_hero_odds()
-            action, say = p.decide(self.build_view(p))
-            reopened, desc = self.apply_action(p, action)
+            view = self.build_view(p)
+            if p.is_human:
+                view["advice"] = self.update_hero_advice(view)
+            action, say = p.decide(view)
+            reopened, desc, event = self.apply_action(p, action)
+            self.hand_actions.append(dict(event, name=p.name, street=self.street,
+                                          desc=desc))
             self.record(p, desc)
             ui.announce_action(p, desc)
+            if p.is_human:
+                self.note_hero_move(view, action, desc)
             if say:
                 self.deliver_chat(p, say, in_action=True)
             else:
@@ -596,23 +728,35 @@ class TexasHoldemGame:
             acted.add(p)
 
     def apply_action(self, p, action):
-        """Mutates state for one action. Returns (reopened_betting, description)."""
+        """Mutates state for one action.
+
+        Returns (reopened_betting, description, event) — `event` is what
+        actually happened after any clamping, structured, so the advisor can
+        read the table from the real moves instead of parsing the sentences we
+        print about them.
+        """
         to_call = self.current_bet - p.bet_street
         kind = action.kind
+        pot_before = self.pot_total()
+
+        def done(reopened, desc, kind, amount):
+            return reopened, desc, {"kind": kind, "amount": amount,
+                                    "pot": pot_before}
 
         if kind == FOLD:
             p.folded = True
-            return False, "folds"
+            return done(False, "folds", "fold", 0)
         if kind == CHECK:
             if to_call <= 0:
-                return False, "checks"
+                return done(False, "checks", "check", 0)
             kind = CALL  # illegal check downgraded to a call
         if kind == CALL:
             amount = min(to_call, p.stack)
             if amount <= 0:
-                return False, "checks"
+                return done(False, "checks", "check", 0)
             self.commit(p, amount)
-            return False, ("calls %d (all-in)" % amount) if p.all_in else ("calls %d" % amount)
+            desc = ("calls %d (all-in)" % amount) if p.all_in else ("calls %d" % amount)
+            return done(False, desc, "call", amount)
 
         # RAISE or ALL_IN — both expressed as "raise the street total to `target`".
         max_to = p.bet_street + p.stack
@@ -626,7 +770,7 @@ class TexasHoldemGame:
 
         chips = target - p.bet_street
         if chips <= 0:
-            return False, "checks"
+            return done(False, "checks", "check", 0)
         previous_bet = self.current_bet
         self.commit(p, chips)
 
@@ -638,14 +782,14 @@ class TexasHoldemGame:
                 reopened = True
             self.current_bet = target
             if p.all_in:
-                desc = "goes ALL-IN for %d" % target
+                desc, event_kind = "goes ALL-IN for %d" % target, "all_in"
             elif previous_bet == 0:
-                desc = "bets %d" % target
+                desc, event_kind = "bets %d" % target, "bet"
             else:
-                desc = "raises to %d" % target
+                desc, event_kind = "raises to %d" % target, "raise"
         else:
-            desc = "calls %d and is all-in" % chips
-        return reopened, desc
+            desc, event_kind = "calls %d and is all-in" % chips, "call"
+        return done(reopened, desc, event_kind, chips)
 
     # ------------------------------------------------------------- views
 
@@ -694,6 +838,9 @@ class TexasHoldemGame:
             },
             "hero_hand_hint": hint,
             "players": players_info,
+            # The same moves as `history`, structured — what the advisor reads
+            # opponents from, and cheap for a brain to ignore.
+            "actions": list(self.hand_actions),
             "history": list(self.history),
             "chat": list(self.chat),
             "memory": list(self.memory),

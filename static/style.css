@@ -356,6 +356,15 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .act.call { background: linear-gradient(180deg,#3aa0e0,#2277b8); }
 .act.raise { background: linear-gradient(180deg,#f0a93a,#d07e15); color:#241c00; }
 .act.allin { background: linear-gradient(180deg,#ef5a45,#c22f1c); }
+/* the coach's own button: distinct from the four moves, since it *is* one of
+   them — it just doesn't make you work out which */
+.act.follow {
+  background: linear-gradient(180deg,#8a6fd0,#6344a8);
+  box-shadow: 0 0 0 1px rgba(179,157,219,.4);
+}
+.auto-btn.coach-mode { border-color: #4a3f66; color: #c9b6ea; }
+.auto-btn.coach-mode:hover { border-color: #b39ddb; color: #d9c6ea; }
+.auto-btn.coach-mode.armed { background: #2f2545; color: #d9c6ea; border-color: #b39ddb; }
 .act:hover { filter: brightness(1.08); }
 
 .raise-panel { margin-top: 12px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
@@ -414,6 +423,54 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .adv-row.total .adv-cat { color: var(--text); font-weight: 700; text-transform: uppercase; font-size: 11px; letter-spacing: .5px; }
 .adv-row.total .adv-num.win { color: var(--green); font-size: 14px; }
 .adv-note { color: var(--dim); font-size: 10.5px; margin-top: 7px; }
+
+/* ---------------- the coach ---------------- */
+.coach {
+  flex: 0 0 auto; border-bottom: 1px solid var(--line);
+  padding: 10px 12px 12px; background: linear-gradient(180deg, #1b1a26, var(--panel));
+}
+.coach-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  color: #b39ddb; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+}
+.coach-conf { color: var(--dim); font-size: 10.5px; text-transform: none; letter-spacing: 0; }
+.coach-rec { margin: 7px 0 5px; }
+.rec-verb {
+  display: inline-block; font-weight: 800; font-size: 13px; letter-spacing: .3px;
+  padding: 3px 11px; border-radius: 9px; border: 1px solid transparent;
+}
+.rec-verb.k-fold { background: #26211f; color: #b9a9a2; border-color: #3a322e; }
+.rec-verb.k-check { background: #17331f; color: #6fdd8b; border-color: #235c33; }
+.rec-verb.k-call { background: #13324a; color: #6bc2f5; border-color: #1f597f; }
+.rec-verb.k-raise { background: #3a2a10; color: #ffc65a; border-color: #6a4d15; }
+.rec-verb.k-all_in { background: #4a1f1a; color: #ff8f7e; border-color: #7a2e26; }
+.coach-line { color: var(--text); font-size: 12.5px; line-height: 1.45; }
+.coach-why { color: var(--dim); font-size: 11px; line-height: 1.45; margin-top: 5px; }
+.coach-reads {
+  margin: 8px 0 6px; display: flex; flex-direction: column; gap: 6px;
+  max-height: 132px; overflow-y: auto;
+}
+.read-row { font-size: 11px; }
+.read-top { display: grid; grid-template-columns: 1fr 56px; gap: 6px; align-items: center; }
+.read-name { color: #c4cdd5; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.read-bar { height: 5px; background: #0e141a; border-radius: 3px; overflow: hidden; }
+.read-bar i { display: block; height: 100%; background: linear-gradient(90deg, #7a3a33, var(--red)); }
+/* the range call: the point of the panel, so it wraps instead of truncating */
+.read-note { color: var(--dim); line-height: 1.35; margin-top: 1px; }
+.coach-math { color: var(--dim); font-size: 10.5px; }
+/* the word after the hand — colour carries the tone */
+.coach-verdict {
+  margin: 7px 0; padding: 7px 10px; border-radius: 9px; font-size: 12.5px;
+  line-height: 1.45; border-left: 3px solid var(--line); background: rgba(0,0,0,.3);
+  animation: pop .25s ease;
+}
+.coach-verdict.tone-told_you { border-left-color: var(--gold); color: #ffd97a; }
+.coach-verdict.tone-vindicated { border-left-color: #e8873f; color: #ffb87a; }
+.coach-verdict.tone-humbled { border-left-color: #6bc2f5; color: #a9d9f5; }
+.coach-verdict.tone-shrug { border-left-color: var(--dim); color: var(--dim); }
+.coach-verdict.tone-defiance { border-left-color: #b39ddb; color: #d9c6ea; }
+.feed-item.coach { color: #d9c6ea; }
+.feed-item.coach .who { color: #b39ddb; }
 
 /* ---------------- autopilot ---------------- */
 .autopilot { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; flex-wrap: wrap; }

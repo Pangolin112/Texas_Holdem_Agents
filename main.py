@@ -11,6 +11,7 @@ import random
 import sys
 
 from holdem import ui
+from holdem.advisor import HeuristicAdvisor, LLMAdvisor
 from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, build_model_chain
 from holdem.game import TexasHoldemGame
 from holdem.players import HumanPlayer, LLMPlayer
@@ -55,6 +56,8 @@ def parse_args():
                              "each hand ends (spoiler — for study/debugging)")
     parser.add_argument("--no-odds", action="store_true",
                         help="don't show your live hand strength and win odds")
+    parser.add_argument("--no-coach", action="store_true",
+                        help="play without the AI coach reading the table for you")
     parser.add_argument("--seed", type=int, default=None, help="random seed (for reproducible decks)")
     parser.add_argument("--lang", choices=("en", "zh"), default="en",
                         help="table language: what the agents speak "
@@ -126,9 +129,16 @@ def main():
         print(ui.dim(" peek mode: everyone's hole cards are revealed after each hand."))
     print(ui.dim(" Type 'h' on your turn for the commands. Good luck.\n"))
 
+    # The coach thinks in the same model as the table when there is one, and on
+    # arithmetic when there isn't — so it works offline like everything else.
+    coach = None
+    if not args.no_coach and not args.no_odds:
+        coach = (HeuristicAdvisor(rng, lang=args.lang) if args.offline
+                 else LLMAdvisor(client, model_chain, rng, lang=args.lang))
+
     game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng,
                            reveal_all=args.show_cards, language=args.lang,
-                           show_odds=not args.no_odds)
+                           show_odds=not args.no_odds, advisor=coach)
     try:
         game.run()
     except (QuitGame, KeyboardInterrupt):

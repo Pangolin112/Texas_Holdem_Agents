@@ -2,14 +2,14 @@
 
 import random
 
-from holdem import evaluator, odds, ui
+from holdem import advisor, evaluator, odds, ui
 from holdem.brains import (PERSONALITIES, HeuristicBrain, LLMBrain, ModelChain,
                            PolicyBrain, spoken_action, _softmax)
 from holdem.cards import Card, Deck, RANK_VALUES
 from holdem.game import TexasHoldemGame, looks_like_move_question
 from holdem.players import (Action, HumanPlayer, LLMPlayer, Player,
-                            ALL_IN, AUTO_CALL, AUTO_CALL_STREET, AUTO_FOLD,
-                            CALL, CHECK, FOLD, RAISE)
+                            ALL_IN, AUTO_ADVISOR, AUTO_CALL, AUTO_CALL_STREET,
+                            AUTO_FOLD, CALL, CHECK, FOLD, RAISE)
 
 ui.QUIET = True
 
@@ -866,6 +866,9 @@ class RecordingSink(ui.Sink):
         self.results = []
         self.odds = []
         self.autos = []
+        self.advices = []   # not `advice`: that would shadow the sink method
+        self.lines = []
+        self.verdicts = []
 
     def hand_result(self, hand_no, rows, board):
         self.results.append({"hand_no": hand_no, "rows": rows, "board": board})
@@ -875,6 +878,15 @@ class RecordingSink(ui.Sink):
 
     def autopilot(self, player, mode):
         self.autos.append((player.name, mode))
+
+    def advice(self, payload):
+        self.advices.append(payload)
+
+    def advisor_line(self, text, kind):
+        self.lines.append((text, kind))
+
+    def advisor_verdict(self, text, tone, context):
+        self.verdicts.append((text, tone, context))
 
 
 def result_game(reveal_all=False):
@@ -992,6 +1004,370 @@ def test_hero_odds_only_run_for_a_live_human():
     ok(not sink2.odds, "--no-odds means the simulator never runs")
 
 
+# --------------------------------------------------------------- the coach
+
+def _seats(*specs):
+    """(name, folded, all_in) -> the players slice of a view."""
+    out = [{"name": "You", "is_hero": True, "folded": False, "all_in": False,
+            "stack": 1000}]
+    for name, folded, all_in in specs:
+        out.append({"name": name, "is_hero": False, "folded": folded,
+                    "all_in": all_in, "stack": 1000})
+    return out
+
+
+def _act(name, kind, amount=0, pot=100, street="FLOP"):
+    return {"name": name, "kind": kind, "amount": amount, "pot": pot,
+            "street": street, "desc": kind}
+
+
+def _aview(to_call=0, pot=100, can_raise=True, min_to=40, max_to=1000,
+           board="", street="FLOP", players=None, actions=None, stack=1000):
+    return {
+        "street": street, "to_call": to_call, "pot": pot, "can_raise": can_raise,
+        "min_raise_to": min_to, "max_raise_to": max_to,
+        "board": cards(board) if board else [],
+        "players": players if players is not None else _seats(("A", False, False)),
+        "actions": actions or [],
+        "hero": {"name": "You", "stack": stack, "bet_street": 0, "committed": 0,
+                 "hole": cards("As Ks")},
+    }
+
+
+def _odds(equity=0.5, samples=5000):
+    return {"equity": equity, "win": equity, "tie": 0.0, "samples": samples,
+            "opponents": 1, "made": {"name": "a Pair of Aces", "cat": 1},
+            "categories": [{"cat": 1, "name": "Pair", "make": 1.0, "win": equity}]}
+
+
+def test_reads_come_from_betting_not_cards():
+    players = _seats(("Raiser", False, False), ("Caller", False, False),
+                     ("Ghost", False, False), ("Gone", True, False))
+    actions = [
+        _act("Raiser", "bet", 60, pot=60), _act("Raiser", "raise", 200, pot=200),
+        _act("Caller", "call", 60, pot=120),
+        _act("Ghost", "check"),
+        _act("Gone", "raise", 500, pot=100),   # folded: must not be read at all
+    ]
+    reads = advisor.read_opponents(players, actions, "FLOP")
+    by = {r["name"]: r for r in reads}
+    ok("You" not in by, "the coach doesn't read its own player")
+    ok("Gone" not in by, "a folded seat is nobody to worry about")
+    ok(by["Raiser"]["key"] == advisor.READ_STRONG, "two raises reads as a strong range")
+    ok(by["Caller"]["key"] == advisor.READ_CALLING, "calling along reads as wide")
+    ok(by["Ghost"]["key"] == advisor.READ_PASSIVE, "checking reads as weak")
+    ok(by["Raiser"]["strength"] > by["Caller"]["strength"] > by["Ghost"]["strength"],
+       "the read orders them by how much they're representing")
+    ok([r["name"] for r in reads][0] == "Raiser", "scariest opponent first")
+
+    shoved = advisor.read_opponents(_seats(("Jam", False, True)),
+                                    [_act("Jam", "all_in", 900, pot=100)], "TURN")
+    ok(shoved[0]["key"] == advisor.READ_SHOVED, "an all-in reads as itself")
+    quiet = advisor.read_opponents(_seats(("New", False, False)), [], "PREFLOP")
+    ok(quiet[0]["key"] == advisor.READ_QUIET and quiet[0]["strength"] == advisor.BASELINE,
+       "a seat that hasn't acted is worth exactly a random hand")
+
+
+def test_equity_is_shaded_by_the_read_but_never_overruled():
+    calm = advisor.read_opponents(_seats(("A", False, False)),
+                                  [_act("A", "check")], "FLOP")
+    scary = advisor.read_opponents(_seats(("A", False, True)),
+                                   [_act("A", "all_in", 900, pot=100)], "RIVER")
+    ok(advisor.discount_equity(0.6, calm) == 0.6,
+       "a table doing nothing scary leaves the maths alone")
+    shaded = advisor.discount_equity(0.6, scary)
+    ok(shaded < 0.6, "a seat screaming at you is real information — shade it")
+    ok(shaded > 0.6 * 0.66, "...but a read never overrules the maths outright")
+    ok(advisor.discount_equity(0.6, []) == 0.6, "nobody left to read: no adjustment")
+
+
+def test_pot_odds_are_the_price_being_offered():
+    ok(advisor.pot_odds(0, 100) == 0.0, "nothing to call is a free look")
+    ok(abs(advisor.pot_odds(50, 150) - 0.25) < 1e-9,
+       "calling 50 into 150 buys a quarter of the final pot")
+    ok(abs(advisor.pot_odds(100, 100) - 0.5) < 1e-9, "a pot-sized bet needs 50%")
+
+
+def test_advice_follows_the_price():
+    coach = advisor.HeuristicAdvisor(random.Random(4), lang="en")
+
+    # 20% equity facing a pot-sized bet (needs 50%) -> get out.
+    a = coach.advise(_aview(to_call=100, pot=100), _odds(0.20))
+    ok(a["action"] == FOLD, "priced out: fold")
+    ok(a["line"], "and it says why, out loud")
+
+    # 45% equity getting 4:1 (needs 20%) -> call.
+    a = coach.advise(_aview(to_call=25, pot=100), _odds(0.45))
+    ok(a["action"] == CALL, "a fair price on a real hand: call")
+
+    # A monster with money behind -> raise, and size it up.
+    a = coach.advise(_aview(to_call=40, pot=200, min_to=80, max_to=1000), _odds(0.90))
+    ok(a["action"] in (RAISE, ALL_IN), "way ahead: get paid")
+    if a["action"] == RAISE:
+        ok(80 <= a["amount"] <= 1000, "the raise it names is legal")
+
+    # Nothing to call and nothing to bet -> take the free card.
+    a = coach.advise(_aview(to_call=0, pot=100, can_raise=False), _odds(0.25))
+    ok(a["action"] == CHECK, "no price, no hand: check")
+
+    # It never recommends something the rules don't allow.
+    rng = random.Random(9)
+    for _ in range(400):
+        to_call = rng.choice([0, 20, 300])
+        can_raise = rng.random() < 0.7
+        view = _aview(to_call=to_call, pot=rng.randint(20, 400), can_raise=can_raise,
+                      min_to=to_call + 20, max_to=to_call + 500)
+        a = coach.advise(view, _odds(rng.random()))
+        assert a["action"] in (FOLD, CHECK, CALL, RAISE, ALL_IN), a["action"]
+        assert not (to_call == 0 and a["action"] == FOLD), "folded for free"
+        assert not (a["action"] == RAISE and not can_raise), "raised illegally"
+        if a["action"] == RAISE:
+            assert view["min_raise_to"] <= a["amount"] <= view["max_raise_to"]
+    ok(True, "400 random spots: the coach's advice is always legal")
+
+
+def test_advice_carries_the_numbers_it_reasoned_from():
+    coach = advisor.HeuristicAdvisor(random.Random(1), lang="en")
+    scary = [_act("A", "all_in", 900, pot=100)]
+    a = coach.advise(_aview(to_call=100, pot=100, players=_seats(("A", False, True)),
+                            actions=scary), _odds(0.55))
+    ok(a["equity"] == 0.55, "the raw equity is shown, not hidden")
+    ok(a["adjusted"] < a["equity"], "...next to what the read does to it")
+    ok(abs(a["pot_odds"] - 0.5) < 1e-9, "...and the price it's up against")
+    ok(a["reads"] and a["reads"][0]["name"] == "A", "with the read that moved it")
+    ok(0.0 <= a["confidence"] <= 1.0, "confidence is a probability")
+    ok(a["source"] == "instinct", "and it says where the advice came from")
+
+
+def test_followed_advice_is_judged_on_intent():
+    raise_200 = {"action": RAISE, "amount": 200}
+    ok(advisor.followed_advice(raise_200, Action(RAISE, 200)), "exactly as told")
+    ok(advisor.followed_advice(raise_200, Action(RAISE, 180)),
+       "a slightly different size is still taking the advice")
+    ok(not advisor.followed_advice(raise_200, Action(RAISE, 800)),
+       "a wildly different size is not")
+    ok(advisor.followed_advice(raise_200, Action(ALL_IN)),
+       "shoving when told to raise is still the aggression it asked for")
+    ok(not advisor.followed_advice(raise_200, Action(FOLD)), "folding is not raising")
+    ok(advisor.followed_advice({"action": FOLD}, Action(FOLD)), "folds match")
+    ok(not advisor.followed_advice({"action": FOLD}, Action(CALL)), "calls don't")
+
+
+def test_verdict_tone_matrix():
+    def tone(followed, right):
+        return advisor.verdict_tone({"followed": followed, "right": right})
+    ok(tone(True, True) == advisor.TONE_TOLD_YOU,
+       "you listened and it worked -> it gets to be smug")
+    ok(tone(False, True) == advisor.TONE_VINDICATED,
+       "you ignored it and it cost you -> 'I did say'")
+    ok(tone(True, False) == advisor.TONE_HUMBLED,
+       "you listened and it cost you -> it has to own that")
+    ok(tone(False, False) == advisor.TONE_HUMBLED,
+       "you ignored it and were right -> it eats that too")
+    ok(tone(True, None) == advisor.TONE_SHRUG and tone(False, None) == advisor.TONE_SHRUG,
+       "nothing was shown: nobody gets to claim anything")
+
+
+def coach_game(**kwargs):
+    hero = HumanPlayer("You", 1000)
+    a, b = Player("A", 1000), Player("B", 1000)
+    rng = random.Random(5)
+    game = make_game([hero, a, b], rng=rng,
+                     advisor=advisor.HeuristicAdvisor(rng, lang="en"), **kwargs)
+    game.hand_players = [hero, a, b]
+    game.board = cards("2h 5c 7s 9d Jc")
+    hero.hole, a.hole, b.hole = cards("As Ad"), cards("Ks Kd"), cards("Qs Qd")
+    return game, hero, a, b
+
+
+def verdict_of(game, advice_action, hero_folded, followed, winnings, committed,
+               shown=("B",)):
+    hero = game.human
+    hero.folded = hero_folded
+    hero.committed = committed
+    game.hand_winnings = dict(winnings)
+    game.shown = set(shown)
+    game.advice_log = [{"street": "FLOP", "advice": {"action": advice_action, "line": ""},
+                        "action": Action(advice_action), "desc": "did a thing",
+                        "followed": followed}]
+    return game.verdict_context(game.advice_log[-1])
+
+
+def test_verdict_context_judges_only_what_the_table_showed():
+    game, hero, a, b = coach_game()
+    # Told to fold, folded, and the hand that WOULD have won gets shown down.
+    ctx = verdict_of(game, FOLD, True, True, {"B": 300}, 40)
+    ok(ctx["would_have_won"] is True, "aces would have beaten the shown queens")
+    ok(ctx["right"] is False, "so telling them to fold was wrong")
+    ok(advisor.verdict_tone(ctx) == advisor.TONE_HUMBLED,
+       "and the coach has to wear it")
+    ok(ctx["net"] == -40, "net is what the hand actually cost them")
+    ok(ctx["hero_hand"] == "a Pair of Aces" and ctx["winner_hand"] == "a Pair of Queens",
+       "both hands are named for the coach to talk about")
+
+    # Nobody showed anything: no claim either way.
+    ctx = verdict_of(game, FOLD, True, True, {}, 40, shown=())
+    ok(ctx["would_have_won"] is None and ctx["right"] is None,
+       "a hand nobody showed down is not evidence the coach may use")
+
+    # Played on and profited after being told to fold -> the coach was wrong.
+    ctx = verdict_of(game, FOLD, False, False, {"You": 500}, 200)
+    ok(ctx["net"] == 300 and ctx["right"] is False, "they profited: the fold advice was wrong")
+    ok(advisor.verdict_tone(ctx) == advisor.TONE_HUMBLED, "ignored it and won: eat it")
+
+    # Played on and lost after being told to fold -> told you so.
+    ctx = verdict_of(game, FOLD, False, False, {}, 200)
+    ok(ctx["net"] == -200 and ctx["right"] is True, "they lost: the fold advice was right")
+    ok(advisor.verdict_tone(ctx) == advisor.TONE_VINDICATED, "'I did tell you'")
+
+    # Told to raise, did, and won -> textbook.
+    ctx = verdict_of(game, RAISE, False, True, {"You": 800}, 300)
+    ok(ctx["right"] is True and advisor.verdict_tone(ctx) == advisor.TONE_TOLD_YOU,
+       "listened to a bet and won: it gets to say so")
+
+    # Broke even: nothing to crow about.
+    ctx = verdict_of(game, CALL, False, True, {"You": 200}, 200)
+    ok(ctx["right"] is None, "a break-even hand proves nothing either way")
+
+
+def test_peek_mode_lets_the_coach_judge_mucked_hands():
+    game, hero, a, b = coach_game(reveal_all=True)
+    ctx = verdict_of(game, FOLD, True, True, {"A": 300}, 40, shown=())
+    ok(ctx["would_have_won"] is True,
+       "peek mode is the player's own choice to see everything — the coach may use it")
+
+
+def test_engine_attaches_the_command_to_whatever_advisor_is_installed():
+    game, hero, a, b = coach_game()
+    game.hero_odds_payload = _odds(0.9)
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        advice = game.update_hero_advice(_aview(to_call=40, pot=200, min_to=80))
+    finally:
+        ui.set_sink(None)
+    ok(advice is not None and sink.advices, "the coach's call is shown, not just computed")
+    ok(advice["command"] == advisor.advice_command(advice),
+       "the engine attaches the command, so every advisor gets one for free")
+    ok(game.hero_advice is advice, "and the turn can act on it")
+    ok(game.advice_log[-1]["advice"] is advice, "and it's on the record for the verdict")
+
+    # No equity numbers -> nothing to reason from -> no advice, no crash.
+    game.hero_odds_payload = None
+    ok(game.update_hero_advice(_aview()) is None, "no odds, no advice")
+
+    # No coach at all.
+    quiet, _h, _a, _b = coach_game()
+    quiet.advisor = None
+    quiet.hero_odds_payload = _odds(0.9)
+    ok(quiet.update_hero_advice(_aview()) is None, "--no-coach means silence")
+
+
+def test_coach_reacts_when_you_go_your_own_way():
+    game, hero, a, b = coach_game()
+    sink = RecordingSink()
+    ui.set_sink(sink)
+    try:
+        view = _aview(to_call=100, pot=100)
+        advice = {"action": FOLD, "amount": 0, "line": "fold it"}
+        game.advice_log = [{"street": "FLOP", "advice": advice, "action": None,
+                            "desc": None, "followed": None}]
+        game.note_hero_move(view, Action(CALL), "calls 100")
+        ok(len(sink.lines) == 1, "defying the coach gets you a word about it")
+        ok(game.advice_log[-1]["followed"] is False, "and it's recorded against the hand")
+
+        game.advice_log = [{"street": "FLOP", "advice": advice, "action": None,
+                            "desc": None, "followed": None}]
+        game.note_hero_move(view, Action(FOLD), "folds")
+        ok(len(sink.lines) == 1, "doing as you're told draws no comment")
+        ok(game.advice_log[-1]["followed"] is True, "but is still recorded")
+    finally:
+        ui.set_sink(None)
+
+
+def test_autopilot_can_follow_the_coach():
+    hero = HumanPlayer("You", 1000)
+    view = _aview(to_call=100, pot=100)
+    view["advice"] = {"action": RAISE, "amount": 260}
+    hero.arm_auto(AUTO_ADVISOR, "FLOP")
+    action = hero.auto_action(view)
+    ok(action.kind == RAISE and action.amount == 260,
+       "following the coach means doing exactly what it said, sizing included")
+
+    # It follows the advice in front of it *now*, not the one it was armed on.
+    view["advice"] = {"action": FOLD}
+    ok(hero.auto_action(view).kind == FOLD, "it re-reads the advice every turn")
+
+    # No advice (the coach fell over, or odds are off) -> give the controls back.
+    view["advice"] = None
+    ok(hero.auto_action(view) is None and hero.auto is None,
+       "nothing to follow: it disarms instead of guessing")
+
+    hero.arm_auto(AUTO_ADVISOR, "FLOP")
+    view["advice"] = {"action": FOLD}
+    view["street"] = "TURN"
+    ok(hero.auto_action(view) is None, "it only covers the street it was armed for")
+
+
+def test_advice_command_is_the_one_way_to_follow_it():
+    ok(advisor.advice_command({"action": FOLD}) == "f", "fold")
+    ok(advisor.advice_command({"action": CHECK}) == "c", "check and call share a key")
+    ok(advisor.advice_command({"action": CALL}) == "c", "call")
+    ok(advisor.advice_command({"action": ALL_IN}) == "a", "all-in")
+    ok(advisor.advice_command({"action": RAISE, "amount": 260}) == "r 260", "raise carries its size")
+    ok(advisor.advice_command(None) is None, "no advice, no command")
+
+
+def test_llm_advisor_keeps_the_maths_and_falls_back():
+    rng = random.Random(2)
+    coach = advisor.LLMAdvisor(client=None, model="x", rng=rng, lang="en")
+    view = _aview(to_call=100, pot=100, min_to=200, max_to=900)
+
+    # No client at all -> pure arithmetic, no crash, no blank panel.
+    a = coach.advise(view, _odds(0.2))
+    ok(a["action"] == FOLD and a["source"] == "instinct",
+       "with no model behind it, the coach still advises")
+
+    # The model's judgement is taken; the numbers stay ours.
+    base = coach.fallback.advise(view, _odds(0.2))
+    merged = coach._merge(base, {"action": "raise", "raise_to": 400, "confidence": 0.8,
+                                 "line": "They're weak. Take it.",
+                                 "reads": [{"name": "A", "note": "bluffing"}]}, view)
+    ok(merged["action"] == RAISE and merged["amount"] == 400, "the model's call is taken")
+    ok(merged["equity"] == 0.2, "but the equity is still measured, not invented")
+    ok(merged["line"] == "They're weak. Take it." and merged["source"] == "llm",
+       "its words and provenance come through")
+    ok(merged["reads"][0]["note"] == "bluffing", "its read is grafted onto our bars")
+    ok(merged["confidence"] == 0.8, "and its confidence")
+
+    # Illegal or nonsense calls are refused, not passed to the engine.
+    ok(coach._merge(base, {"action": "moon"}, view)["action"] == FOLD,
+       "an action that isn't a poker move falls back to the arithmetic")
+    free = _aview(to_call=0, pot=100)
+    ok(coach._merge(coach.fallback.advise(free, _odds(0.2)),
+                    {"action": "fold"}, free)["action"] == CHECK,
+       "it never tells you to fold for free, whatever the model says")
+    no_raise = _aview(to_call=50, pot=100, can_raise=False)
+    ok(coach._merge(coach.fallback.advise(no_raise, _odds(0.5)),
+                    {"action": "raise", "raise_to": 500}, no_raise)["action"] == CALL,
+       "a raise it isn't allowed to make becomes a call")
+    ok(coach._merge(base, {"action": "raise", "raise_to": 99999}, view)["action"] == ALL_IN,
+       "a raise past the stack is a shove")
+    ok(coach._merge(base, {"action": "raise", "raise_to": 1}, view)["amount"] == 200,
+       "an undersized raise is lifted to the legal minimum")
+
+    # A model that throws mid-hand must not take the panel down with it.
+    def boom(*a, **k):
+        raise RuntimeError("uplink down")
+    live = advisor.LLMAdvisor(client=object(), model="x", rng=rng, lang="en")
+    live._create = boom
+    out = live.advise(view, _odds(0.2))
+    ok(out["source"] == "instinct", "an API failure falls back to instinct silently")
+    ok(live.verdict({"followed": True, "right": True})[0] == advisor.TONE_TOLD_YOU,
+       "...and so does the verdict")
+    ok(live.on_defiance({"action": FOLD}, Action(CALL), view), "...and the reaction")
+
+
 def test_hand_winnings_track_every_payout():
     players = [Player("P0", 0), Player("P1", 0), Player("P2", 0)]
     game = make_game(players)
@@ -1072,5 +1448,19 @@ if __name__ == "__main__":
     test_hand_result_keeps_mucked_cards_secret()
     test_hand_result_survives_a_preflop_fold_around()
     test_hero_odds_only_run_for_a_live_human()
+    test_reads_come_from_betting_not_cards()
+    test_equity_is_shaded_by_the_read_but_never_overruled()
+    test_pot_odds_are_the_price_being_offered()
+    test_advice_follows_the_price()
+    test_advice_carries_the_numbers_it_reasoned_from()
+    test_followed_advice_is_judged_on_intent()
+    test_verdict_tone_matrix()
+    test_verdict_context_judges_only_what_the_table_showed()
+    test_peek_mode_lets_the_coach_judge_mucked_hands()
+    test_engine_attaches_the_command_to_whatever_advisor_is_installed()
+    test_coach_reacts_when_you_go_your_own_way()
+    test_autopilot_can_follow_the_coach()
+    test_advice_command_is_the_one_way_to_follow_it()
+    test_llm_advisor_keeps_the_maths_and_falls_back()
     test_hand_winnings_track_every_payout()
     print("all good: %d checks passed" % CHECKS["passed"])

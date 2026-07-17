@@ -81,6 +81,15 @@ class Sink:
     def hero_odds(self, payload):
         pass
 
+    def advice(self, payload):
+        pass
+
+    def advisor_line(self, text, kind):
+        pass
+
+    def advisor_verdict(self, text, tone, context):
+        pass
+
     def autopilot(self, player, mode):
         pass
 
@@ -288,6 +297,8 @@ def show_help():
     out(dim("   c            check (if free) / call"))
     out(dim("   r <amount>   raise TO <amount> total this street, e.g. 'r 120'"))
     out(dim("   a            all-in"))
+    out(dim("   ai           do what the coach just told you to do"))
+    out(dim("   aa           autopilot: follow the coach for the rest of this street"))
     out(dim("   ff           autopilot: check while it's free, fold to any bet this hand"))
     out(dim("   cc           autopilot: call everything until the hand ends"))
     out(dim("   cs           autopilot: call for the rest of this street"))
@@ -387,10 +398,78 @@ def hero_odds(payload):
     out("   " + _pad("TOTAL", 16) + _c(C.GREEN, bold("you win " + verdict)) + tail)
 
 
+READ_LABELS = {
+    "shoved": "all-in — the nuts or nothing",
+    "polarized": "huge bet — monster or air",
+    "strong": "raising hard — big pairs, sets, made hands",
+    "aggressive": "raised — better than average",
+    "calling": "just calling — draws, medium pairs",
+    "passive": "checking along — likely weak",
+    "quiet": "nothing to read yet",
+}
+
+ADVICE_VERBS = {
+    "fold": "FOLD", "check": "CHECK", "call": "CALL",
+    "raise": "RAISE", "all_in": "ALL-IN",
+}
+
+
+def advice(payload):
+    """The coach's call on the spot in front of you: what the table looks like,
+    what the price is, and what to do about it."""
+    sink = get_sink()
+    if sink is not None:
+        sink.advice(payload)
+        return
+    if not payload:
+        return
+    verb = ADVICE_VERBS.get(payload["action"], payload["action"])
+    if payload["action"] == "raise" and payload["amount"]:
+        verb += " to %d" % payload["amount"]
+    out()
+    out(bold(" ── the coach ──") + dim("   %.0f%% sure · %s"
+                                       % (payload["confidence"] * 100,
+                                          "read the model" if payload["source"] == "llm"
+                                          else "instinct")))
+    for read in payload["reads"]:
+        note = read["note"] or READ_LABELS.get(read["key"], read["key"])
+        bar = "█" * int(round(read["strength"] * 10))
+        out("   %s %s %s" % (_pad(read["name"], 14), _c(C.RED, _pad(bar, 10)), dim(note)))
+    if payload["to_call"] > 0:
+        out(dim("   you win %.0f%% (%.0f%% after the read) · the price needs %.0f%%"
+                % (payload["equity"] * 100, payload["adjusted"] * 100,
+                   payload["pot_odds"] * 100)))
+    else:
+        out(dim("   you win %.0f%% (%.0f%% after the read) · nothing to call"
+                % (payload["equity"] * 100, payload["adjusted"] * 100)))
+    out("   %s  %s" % (_c(C.YELLOW, bold(verb)), payload["line"]))
+    if payload.get("reasoning"):
+        out(dim("   " + payload["reasoning"]))
+    out(dim("   'ai' to do it · 'aa' to follow the coach all street"))
+
+
+def advisor_line(text, kind="defiance"):
+    sink = get_sink()
+    if sink is not None:
+        sink.advisor_line(text, kind)
+        return
+    out(_c(C.MAGENTA, '   coach: "%s"' % text))
+
+
+def advisor_verdict(text, tone, context=None):
+    sink = get_sink()
+    if sink is not None:
+        sink.advisor_verdict(text, tone, context)
+        return
+    out()
+    out(_c(C.MAGENTA, '   coach: "%s"' % text))
+
+
 AUTOPILOT_LABELS = {
     "auto_fold": "fold this hand (checking while it's free)",
     "auto_call": "call everything to the end of the hand",
     "auto_call_street": "call for the rest of this street",
+    "auto_advisor": "do whatever the coach says, for this street",
 }
 
 

@@ -714,23 +714,78 @@ def reconcile_action(action, say, view, raise_to=None):
     return Action(want), say
 
 
-class LLMBrain(Brain):
+class ModelCaller:
+    """Everything about *talking to the endpoint*, with none of the poker.
+
+    The model chain, the automatic downgrade when an id isn't available, and
+    the retry for endpoints that reject response_format/temperature live here so
+    a seat's brain and the player's advisor (holdem/advisor.py) share one
+    battle-tested path to the API instead of two drifting copies.
+    """
+
+    def __init__(self, client: Any, model: "str | ModelChain") -> None:
+        self.client = client
+        # `model` may be a plain id (tests, simple calls) or a shared ModelChain.
+        self.chain = model if isinstance(model, ModelChain) else ModelChain([model])
+
+    @property
+    def model(self) -> str:
+        return self.chain.current
+
+    def _one_call(self, model, messages, json_mode, effort, plain=False):
+        kwargs = {"model": model, "messages": messages}
+        if not plain:
+            # deepseek-reasoner (like the OpenAI o-series) rejects response_format,
+            # temperature and other sampling params — send the bare request.
+            ds_reasoner = model.startswith("deepseek-reasoner")
+            if json_mode and not ds_reasoner:
+                kwargs["response_format"] = {"type": "json_object"}
+            if model.startswith(("gpt-5", "o1", "o3", "o4")):
+                kwargs["reasoning_effort"] = effort
+            elif not ds_reasoner:
+                kwargs["temperature"] = 1.0
+        resp = self.client.chat.completions.create(**kwargs)
+        return resp.choices[0].message.content or ""
+
+    def _create(self, messages, json_mode=True, effort="low"):
+        # `effort` trades speed for depth: "low" for quick decisions and banter,
+        # higher when the player asks a seat to justify its reasoning.
+        last = None
+        for _ in range(len(self.chain.models) + 1):
+            model = self.chain.current
+            try:
+                return self._one_call(model, messages, json_mode, effort)
+            except Exception as exc:
+                last = exc
+                if _is_model_error(exc):
+                    if self.chain.downgrade():
+                        ui.warn("model '%s' unavailable — switching to '%s'."
+                                % (model, self.chain.current))
+                        continue
+                    raise
+                # A response_format / temperature / reasoning quirk: retry once
+                # as a plain call before giving up on this model.
+                try:
+                    return self._one_call(model, messages, json_mode, effort, plain=True)
+                except Exception as exc2:
+                    last = exc2
+                    if _is_model_error(exc2) and self.chain.downgrade():
+                        continue
+                    raise
+        raise last
+
+
+class LLMBrain(ModelCaller, Brain):
     is_llm: bool = True
 
     def __init__(self, client: Any, model: "str | ModelChain",
                  personality: dict[str, Any], rng: random.Random,
                  lang: str = "en") -> None:
-        self.client = client
-        # `model` may be a plain id (tests, simple calls) or a shared ModelChain.
-        self.chain = model if isinstance(model, ModelChain) else ModelChain([model])
+        super().__init__(client, model)
         self.p = personality
         self.lang = lang
         self.fallback = HeuristicBrain(personality, rng, lang)
         self._warned = False
-
-    @property
-    def model(self) -> str:
-        return self.chain.current
 
     def decide(self, player: Player, view: PlayerView) -> tuple[Action, Optional[str]]:
         ui.thinking(player.name)
@@ -783,48 +838,6 @@ class LLMBrain(Brain):
             raise ValueError("no JSON in buy reply")
         amount = int(json.loads(match.group(0)).get("buy") or 0)
         return max(0, min(amount, cap))
-
-    def _one_call(self, model, messages, json_mode, effort, plain=False):
-        kwargs = {"model": model, "messages": messages}
-        if not plain:
-            # deepseek-reasoner (like the OpenAI o-series) rejects response_format,
-            # temperature and other sampling params — send the bare request.
-            ds_reasoner = model.startswith("deepseek-reasoner")
-            if json_mode and not ds_reasoner:
-                kwargs["response_format"] = {"type": "json_object"}
-            if model.startswith(("gpt-5", "o1", "o3", "o4")):
-                kwargs["reasoning_effort"] = effort
-            elif not ds_reasoner:
-                kwargs["temperature"] = 1.0
-        resp = self.client.chat.completions.create(**kwargs)
-        return resp.choices[0].message.content or ""
-
-    def _create(self, messages, json_mode=True, effort="low"):
-        # `effort` trades speed for depth: "low" for quick decisions and banter,
-        # higher when the player asks a seat to justify its reasoning.
-        last = None
-        for _ in range(len(self.chain.models) + 1):
-            model = self.chain.current
-            try:
-                return self._one_call(model, messages, json_mode, effort)
-            except Exception as exc:
-                last = exc
-                if _is_model_error(exc):
-                    if self.chain.downgrade():
-                        ui.warn("model '%s' unavailable — switching to '%s'."
-                                % (model, self.chain.current))
-                        continue
-                    raise
-                # A response_format / temperature / reasoning quirk: retry once
-                # as a plain call before giving up on this model.
-                try:
-                    return self._one_call(model, messages, json_mode, effort, plain=True)
-                except Exception as exc2:
-                    last = exc2
-                    if _is_model_error(exc2) and self.chain.downgrade():
-                        continue
-                    raise
-        raise last
 
     def _ask(self, player, view):
         messages = [

@@ -23,6 +23,7 @@ const I18N = {
     chk_offline: "Offline (built-in bots, no API)",
     chk_peek: "Peek mode (reveal cards after each hand)",
     chk_odds: "Show my live hand strength and win odds",
+    chk_coach: "AI coach: read the table and tell me what to do",
     lbl_seed: "Seed (optional, reproducible deck)", ph_seed: "random",
     deal_in: "Deal me in",
     shuffling: "Shuffling…",
@@ -89,6 +90,23 @@ const I18N = {
     res_folded: "folded",
     res_note: "Mucked hands stay secret. Tick “Peek mode” at setup to see folded players' cards too.",
     res_preflop: "no board — the hand ended before the flop",
+    /* the coach */
+    coach_title: "AI Coach",
+    coach_thinking: "reading the table…",
+    coach_sure: "{p} sure",
+    coach_math: "you win {e} → {a} after the read · the price needs {o}",
+    coach_math_free: "you win {e} → {a} after the read · nothing to call",
+    follow_ai: "Follow the coach",
+    auto_coach: "Follow the coach this street",
+    auto_on_auto_advisor: "armed — doing whatever the coach says this street (click again to cancel)",
+    raise_to_n: "Raise to {n}",
+    read_shoved: "all-in — the nuts or nothing",
+    read_polarized: "huge bet — monster or air",
+    read_strong: "raising hard — big pairs, sets, made hands",
+    read_aggressive: "raised — better than average",
+    read_calling: "just calling — draws, medium pairs",
+    read_passive: "checking along — likely weak",
+    read_quiet: "nothing to read yet",
   },
   zh: {
     page_title: "德州扑克 — 你 vs 机器",
@@ -100,6 +118,7 @@ const I18N = {
     chk_offline: "离线模式（内置机器人，不调用 API）",
     chk_peek: "偷看模式（每手结束后亮出所有底牌）",
     chk_odds: "显示我的实时牌力与胜率",
+    chk_coach: "AI 教练：帮我读牌桌，告诉我该怎么打",
     lbl_seed: "随机种子（可选，可复现的牌序）", ph_seed: "随机",
     deal_in: "发牌，我上桌",
     shuffling: "洗牌中…",
@@ -166,6 +185,23 @@ const I18N = {
     res_folded: "已弃牌",
     res_note: "盖掉的牌不会公开。在开局设置里勾选“偷看模式”，弃牌玩家的底牌也会一起亮出来。",
     res_preflop: "翻牌前就结束了，没有公共牌",
+    /* the coach */
+    coach_title: "AI 教练",
+    coach_thinking: "正在读牌桌……",
+    coach_sure: "把握 {p}",
+    coach_math: "胜率 {e} → 读牌后 {a} · 这个价格需要 {o}",
+    coach_math_free: "胜率 {e} → 读牌后 {a} · 不用跟注",
+    follow_ai: "遵循 AI",
+    auto_coach: "本轮跟随 AI",
+    auto_on_auto_advisor: "已预约：本轮听教练的（再点一次取消）",
+    raise_to_n: "加注到 {n}",
+    read_shoved: "全下——不是坚果就是空气",
+    read_polarized: "巨额下注——大牌或者纯诈唬",
+    read_strong: "连续加注——大对子、三条、成牌",
+    read_aggressive: "加注过——比平均水平强",
+    read_calling: "只是跟注——听牌或中等牌",
+    read_passive: "一路过牌——大概率很弱",
+    read_quiet: "还看不出什么",
   },
 };
 
@@ -288,6 +324,8 @@ const G = {
   meta: {},
   summary: null,      // finished-hand recap, shown until the next deal
   odds: null,         // newest live read for our seat (null until one arrives)
+  advice: null,       // the coach's call on the spot in front of us
+  verdict: null,      // its word once the hand is over
   result: null,       // finished-hand review: every seat's cards + formula
   actions: {},        // name -> {key, n, k}: each seat's latest move this street
   accessCode: null,   // remembered ACCESS_CODE, if the host requires one
@@ -370,6 +408,7 @@ function startGame() {
     offline: $("opt-offline").checked,
     show_cards: $("opt-showcards").checked,
     odds: $("opt-odds").checked,
+    coach: $("opt-coach").checked,
     seed: $("opt-seed").value === "" ? null : clampInt($("opt-seed").value, 0, 1e12, null),
     language: G.lang,          // what the agents speak
   };
@@ -440,6 +479,7 @@ function handle(ev) {
       resetSummary();
       hideResult();
       G.odds = null; G.result = null;
+      G.advice = null; G.verdict = null;
       G.actions = {};
       G.thinking = null;
       feed(t("feed_hand", { n: ev.hand_no, sb: ev.sb, bb: ev.bb, dealer: esc(ev.dealer) }), "sys");
@@ -480,6 +520,16 @@ function handle(ev) {
       break;
     case "odds":
       G.odds = ev.odds;
+      break;
+    case "advice":
+      G.advice = ev.advice;
+      G.verdict = null;
+      break;
+    case "advisor_line":     // you went your own way and it had something to say
+    case "advisor_verdict":  // the hand is over and it found out if it was right
+      G.verdict = { text: ev.text, tone: ev.tone || "defiance" };
+      feed(`<span class="who">${esc(coachName())}</span>: "${esc(ev.text)}"`, "coach");
+      if (typeof speak === "function") speak(G.meta.coach_name || "Coach", ev.text);
       break;
     case "autopilot":
       // The snapshot carries the armed mode; this event just wakes the render.
@@ -566,6 +616,17 @@ function showActionControls() {
   $("act-raise").classList.toggle("hidden", !L.can_raise);
   $("raise-panel").classList.add("hidden");
   $("hero-hint").textContent = heroHintText();
+  renderFollowButton();
+}
+
+/* The follow button says what it will actually do, so it's never a leap of
+ * faith — "Follow the coach · Raise to 156". */
+function renderFollowButton() {
+  const btn = $("act-follow");
+  const a = G.advice;
+  const show = !!(a && a.command && G.mode === "action" && G.meta.coach);
+  btn.classList.toggle("hidden", !show);
+  if (show) btn.textContent = t("follow_ai") + " · " + adviceText(a);
 }
 
 /* The line right above the buttons — what you hold and what it's worth. Reads
@@ -746,10 +807,14 @@ function render() {
 
   renderSummary();
   renderAdvisor();
+  renderCoach();
   renderAutopilot();
   // Keep the hint live while it's our turn: the odds land after the prompt, and
   // the board can move under us when we're all-in.
-  if (G.mode === "action") $("hero-hint").textContent = heroHintText();
+  if (G.mode === "action") {
+    $("hero-hint").textContent = heroHintText();
+    renderFollowButton();
+  }
 }
 
 /* ---- live read: best hand right now + what you can still get to ---- */
@@ -808,6 +873,87 @@ function renderAdvisor() {
   $("adv-note").textContent = t(o.final ? "adv_final" : "adv_samples",
                                 { n: o.samples, k: o.opponents });
 }
+
+/* ---- the coach: the read, the call, and the word afterwards ---- */
+
+function coachName() { return t("coach_title"); }
+
+/* what the coach's recommendation is, in words — also the follow button's label */
+function adviceText(a) {
+  if (!a) return "";
+  if (a.action === "fold") return t("fold");
+  if (a.action === "check") return t("check");
+  if (a.action === "all_in") return t("allin");
+  if (a.action === "raise") return t("raise_to_n", { n: a.amount });
+  return t("call_n", { n: a.to_call });
+}
+
+function readText(r) {
+  // The model writes its own read in the table's language when it has one;
+  // otherwise the structured key gets worded here.
+  return r.note || t("read_" + r.key);
+}
+
+function renderCoach() {
+  const el = $("coach");
+  const s = G.state;
+  if (!s || !G.meta.coach || !heroSeat() || !heroSeat().card_count) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+
+  const v = $("coach-verdict");
+  if (G.verdict) {
+    v.className = "coach-verdict tone-" + G.verdict.tone;
+    v.textContent = "“" + G.verdict.text + "”";
+  } else {
+    v.className = "coach-verdict hidden";
+  }
+
+  const thinking = G.thinking && G.thinking === G.meta.coach_name;
+  const a = G.advice;
+  const body = $("coach-body");
+  // Once the hand is over the verdict is the whole story — leaving the call it
+  // made three streets ago on screen just reads as advice for a hand that no
+  // longer exists. (A defiance line lands mid-hand, so it keeps the body.)
+  const handOver = G.verdict && G.verdict.tone !== "defiance";
+  if (!a || s.hero_folded || handOver) {
+    body.classList.add("hidden");
+    $("coach-conf").textContent = thinking ? t("coach_thinking") : "";
+    return;
+  }
+  body.classList.remove("hidden");
+  $("coach-conf").textContent = thinking
+    ? t("coach_thinking")
+    : t("coach_sure", { p: pct(a.confidence) });
+
+  $("coach-rec").innerHTML =
+    `<span class="rec-verb k-${esc(a.action)}">${esc(adviceText(a))}</span>`;
+  $("coach-line").textContent = a.line || "";
+  $("coach-why").textContent = a.reasoning || "";
+  $("coach-why").classList.toggle("hidden", !a.reasoning);
+  // Name and bar on one line, the read itself on its own line below it — this
+  // is the range call, so it wraps in full rather than getting an ellipsis.
+  $("coach-reads").innerHTML = (a.reads || []).map((r) =>
+    `<div class="read-row">` +
+      `<div class="read-top">` +
+        `<span class="read-name">${esc(r.name)}</span>` +
+        `<span class="read-bar"><i style="width:${Math.round(r.strength * 100)}%"></i></span>` +
+      `</div>` +
+      `<div class="read-note">${esc(readText(r))}</div>` +
+    `</div>`).join("");
+  $("coach-math").textContent = a.to_call > 0
+    ? t("coach_math", { e: pct(a.equity), a: pct(a.adjusted), o: pct(a.pot_odds) })
+    : t("coach_math_free", { e: pct(a.equity), a: pct(a.adjusted) });
+}
+
+/* one click, exactly the move the coach asked for — the engine ships the
+ * command with the advice so every front-end follows it the same way */
+$("act-follow").addEventListener("click", () => {
+  if (!G.advice || !G.advice.command) return;
+  act(G.advice.command);
+});
 
 /* ---- autopilot: commit to a move before the turn gets to you ---- */
 

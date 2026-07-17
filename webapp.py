@@ -31,10 +31,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from holdem import ui
+from holdem.advisor import ADVISOR, HeuristicAdvisor, LLMAdvisor
 from holdem.brains import PERSONALITIES, HeuristicBrain, LLMBrain, build_model_chain
 from holdem.cards import RED_SUITS, SUIT_SYMBOLS, VALUE_CHARS, VALUE_LABELS
 from holdem.game import TexasHoldemGame
-from holdem.players import AUTO_FOLD, AUTOPILOT_MODES, HumanPlayer, LLMPlayer
+from holdem.players import (AUTO_ADVISOR, AUTO_FOLD, AUTOPILOT_MODES,
+                            HumanPlayer, LLMPlayer)
 from holdem.ui import QuitGame
 from holdem import evaluator
 
@@ -316,6 +318,17 @@ class WebSink(ui.Sink):
             data["made"] = dict(made, cards=cards_data(made["cards"]))
         self.send("odds", odds=data)
 
+    def advice(self, payload):
+        self.send("advice", advice=payload)
+
+    def advisor_line(self, text, kind):
+        self.send("advisor_line", text=text, kind=kind)
+
+    def advisor_verdict(self, text, tone, context):
+        context = context or {}
+        self.send("advisor_verdict", text=text, tone=tone,
+                  followed=bool(context.get("followed")), net=context.get("net"))
+
     def autopilot(self, player, mode):
         self.send("autopilot", name=player.name, mode=mode)
 
@@ -428,6 +441,8 @@ def build_game(options):
     count = max(1, min(int(options.get("opponents") or 5), len(PERSONALITIES)))
     reveal_all = bool(options.get("show_cards"))
     show_odds = options.get("odds", True) is not False
+    # The coach reasons from the equity numbers, so it can't run without them.
+    want_coach = options.get("coach", True) is not False and show_odds
     # Table language: what the agents speak ("zh" = Chinese, default English).
     lang = "zh" if str(options.get("language") or "").lower().startswith("zh") else "en"
 
@@ -440,8 +455,13 @@ def build_game(options):
             brain = LLMBrain(client, model_chain, personality, rng, lang=lang)
         players.append(LLMPlayer(personality["name"], stack, personality, brain))
 
+    coach = None
+    if want_coach:
+        coach = (HeuristicAdvisor(rng, lang=lang) if offline
+                 else LLMAdvisor(client, model_chain, rng, lang=lang))
+
     game = TexasHoldemGame(players, sb=sb, bb=bb, rng=rng, reveal_all=reveal_all,
-                           language=lang, show_odds=show_odds)
+                           language=lang, show_odds=show_odds, advisor=coach)
     meta = {
         "note": note,
         "offline": offline,
@@ -450,6 +470,8 @@ def build_game(options):
         "seed": seed,
         "show_cards": reveal_all,
         "odds": show_odds,
+        "coach": coach is not None,
+        "coach_name": ADVISOR["name"],
         "language": lang,
         # natural agent voices need the API; the browser falls back to its own
         # speech synthesis when this is False. DeepSeek's endpoint has no TTS,
@@ -510,6 +532,8 @@ def run_game(session):
                  p.personality.get("tts_style", ""))
         for p in game.players if hasattr(p, "personality")
     }
+    # The coach isn't a seat, but it talks — give it its own voice.
+    session.voices[ADVISOR["name"]] = (ADVISOR["voice"], ADVISOR["tts_style"])
     ui.set_sink(sink)
     talker = threading.Thread(target=chat_worker, args=(session, game, sink),
                               daemon=True)
@@ -682,6 +706,11 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": False, "error": "no human seat"}
         if mode not in AUTOPILOT_MODES:
             mode = None
+        advice = game.hero_advice
+        if mode == AUTO_ADVISOR and not advice:
+            # Nothing to follow — don't arm a mode that would just hand the
+            # controls straight back.
+            return {"ok": False, "error": "no advice yet"}
         # arm_auto reports through the sink, which is thread-local — this is an
         # HTTP thread, so lend it the session's sink for the call.
         ui.set_sink(session.sink)
@@ -691,8 +720,13 @@ class Handler(BaseHTTPRequestHandler):
             ui.set_sink(None)
         pending = session.pending_await
         if mode and pending is not None and pending.get("mode") == "action":
-            to_call = (pending.get("legal") or {}).get("to_call") or 0
-            session.inbound.put("f" if (mode == AUTO_FOLD and to_call > 0) else "c")
+            if mode == AUTO_ADVISOR:
+                line = advice.get("command") or "c"
+            elif mode == AUTO_FOLD and ((pending.get("legal") or {}).get("to_call") or 0) > 0:
+                line = "f"
+            else:
+                line = "c"
+            session.inbound.put(line)
         return {"ok": True, "mode": mode}
 
     # -- natural agent voices (OpenAI TTS, proxied so the key stays here) ----

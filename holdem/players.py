@@ -37,7 +37,28 @@ ALL_IN: Final = "all_in"
 AUTO_FOLD: Final = "auto_fold"                # give up on this hand
 AUTO_CALL: Final = "auto_call"                # call whatever comes, all hand
 AUTO_CALL_STREET: Final = "auto_call_street"  # ...but only this street
-AUTOPILOT_MODES: Final = (AUTO_FOLD, AUTO_CALL, AUTO_CALL_STREET)
+AUTO_ADVISOR: Final = "auto_advisor"          # do whatever the coach says, this street
+AUTOPILOT_MODES: Final = (AUTO_FOLD, AUTO_CALL, AUTO_CALL_STREET, AUTO_ADVISOR)
+# Modes that only last the street they were armed on.
+STREET_MODES: Final = (AUTO_CALL_STREET, AUTO_ADVISOR)
+
+
+def advice_action(advice: Optional[dict]) -> Optional[Action]:
+    """The advisor's recommendation as an Action the engine can apply.
+
+    Lives here, next to the action vocabulary it speaks, so the follow-the-coach
+    button, the autopilot and the terminal all carry out advice identically —
+    and so holdem/advisor.py can import it without the two modules importing
+    each other.
+    """
+    if not advice:
+        return None
+    kind = advice.get("action")
+    if kind == RAISE:
+        return Action(RAISE, int(advice.get("amount") or 0))
+    if kind in (FOLD, CHECK, CALL, ALL_IN):
+        return Action(kind)
+    return None
 
 
 class Action:
@@ -128,16 +149,24 @@ class HumanPlayer(Player):
         if mode not in AUTOPILOT_MODES:
             mode = None
         self.auto = mode
-        self.auto_street = street if mode == AUTO_CALL_STREET else None
+        self.auto_street = street if mode in STREET_MODES else None
         ui.autopilot(self, mode)
 
     def auto_action(self, view: PlayerView) -> Optional[Action]:
         """The move the autopilot commits to here, or None to ask the human."""
         if self.auto is None:
             return None
-        if self.auto == AUTO_CALL_STREET and view["street"] != self.auto_street:
+        if self.auto in STREET_MODES and view["street"] != self.auto_street:
             self.arm_auto(None)  # the street it was armed for is over
             return None
+        if self.auto == AUTO_ADVISOR:
+            # Following the coach means following whatever it says *now*, not a
+            # move recorded earlier. No advice this turn (it fell over, or odds
+            # are off) -> hand the controls back rather than guess.
+            action = advice_action(view.get("advice"))
+            if action is None:
+                self.arm_auto(None)
+            return action
         if self.auto == AUTO_FOLD:
             # Folding when checking is free just throws away a free card, so
             # hold on until someone actually bets — same rule as typing 'f'.
@@ -156,14 +185,23 @@ class HumanPlayer(Player):
             if low in ("h", "help", "?"):
                 ui.show_help()
                 continue
-            if low in ("ff", "cc", "cs", "x"):
-                mode = {"ff": AUTO_FOLD, "cc": AUTO_CALL,
-                        "cs": AUTO_CALL_STREET, "x": None}[low]
+            if low in ("ff", "cc", "cs", "aa", "x"):
+                mode = {"ff": AUTO_FOLD, "cc": AUTO_CALL, "cs": AUTO_CALL_STREET,
+                        "aa": AUTO_ADVISOR, "x": None}[low]
+                if mode == AUTO_ADVISOR and not view.get("advice"):
+                    ui.out(ui.dim("   no advice to follow right now."))
+                    continue
                 self.arm_auto(mode, view["street"])
                 if mode is None:
                     continue
                 # Armed at your own turn, it takes effect on this very move.
                 return self.auto_action(view), None
+            if low in ("ai", "follow"):
+                action = advice_action(view.get("advice"))
+                if action is None:
+                    ui.out(ui.dim("   no advice to follow right now."))
+                    continue
+                return action, None
             if low.startswith("say"):
                 text = raw[3:].strip()
                 if text:

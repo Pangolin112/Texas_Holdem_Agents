@@ -48,6 +48,7 @@ Options:
 | `--seed N` | reproducible shuffles |
 | `--show-cards` | peek mode: also open up **folded** players' cards in the end-of-hand review |
 | `--no-odds` | don't show your live hand strength and win odds |
+| `--no-coach` | play without the AI coach reading the table for you |
 | `--lang zh` | the agents speak Chinese — table talk, reactions, explanations (default `en`) |
 
 ## Play — web (2D table)
@@ -134,6 +135,8 @@ On your turn:
 | `c` (or Enter when free) | check / call |
 | `r 120` | raise **to** 120 total for this street |
 | `a` | all-in |
+| `ai` | do what the coach just told you to do |
+| `aa` | autopilot: follow the coach for the rest of this street |
 | `ff` / `cc` / `cs` | autopilot: fold this hand / call everything / call this street |
 | `x` | autopilot off — hand the controls back |
 | `say nice try, robot` | chat with the table — the AIs hear you and answer back |
@@ -218,6 +221,60 @@ Only *your* seat gets this; the agents reason from their own view, and handing
 them a solver would make them something else entirely. Turn it off with
 `--no-odds` (or the setup checkbox).
 
+### The coach
+
+A second AI stands behind your chair. It doesn't play — it reads the table and
+tells you what to do, and then it has to live with it.
+
+```
+ ── the coach ──   72% sure · read the model
+   Mike       ████████   bet every street — big pair or a set, not a flush
+   Emma       ████       along for the ride, probably a draw
+   you win 62% (55% after the read) · the price needs 30%
+   RAISE to 620  You have the nuts on a wet board — make him pay for the river.
+   'ai' to do it · 'aa' to follow the coach all street
+```
+
+**It reads opponents from their betting, never from their cards.** It is not
+allowed to see anyone's hole cards, and doesn't: a seat that has raised twice is
+representing a narrow, strong range; one that has called along is wide and weak.
+That read is built from the structured action log, so it only ever knows what
+you know.
+
+**The read is what turns equity into advice.** `odds.py` says how often you win
+against *random* hands — but nobody plays random hands, and a seat betting into
+you is not random. So the read discounts your raw equity (by at most a third; a
+read is a correction, not a second opinion), and the *discounted* number is what
+gets compared to the price you're being offered. Call when it beats the pot
+odds, fold when it doesn't, raise when you're far enough ahead to get paid.
+
+**One click to follow it.** The **Follow the coach** button says what it will
+do — *Follow the coach · Raise to 620* — so it's never a leap of faith. Or arm
+**本轮跟随 AI** to let it play the rest of the street for you. The engine ships
+the command *with* the advice, so the button, the autopilot and the terminal
+can't drift into following it three different ways.
+
+**It owns the result.** When the hand ends the coach is told what actually
+happened and whether you listened, and has to say so:
+
+| | |
+|---|---|
+| you listened, it worked | *"What did I say."* |
+| you ignored it, it cost you | *"我不是早就说了别想了直接弃牌吗，这下白送180。"* |
+| you listened and it cost you | *"...Right. Forget I said anything."* |
+| you ignored it and won | it eats that one too |
+| nothing was shown down | *"Nothing to learn from that one."* |
+
+That last row matters: it judges itself **only on hands the table actually
+showed** (plus everything, in peek mode). If everyone folded, nobody knows what
+would have happened — so it doesn't get to claim it was right, and it can't leak
+what the mucked cards were. And if you go your own way mid-hand, it says
+something about that too, right then.
+
+Offline (or the moment the API coughs) the coach is pure arithmetic with canned
+lines — the advice never just disappears. Turn it off with `--no-coach` or the
+setup checkbox. It needs the equity numbers, so `--no-odds` turns it off too.
+
 ### Autopilot — commit before your turn
 
 Decide early and stop waiting on the table:
@@ -227,6 +284,7 @@ Decide early and stop waiting on the table:
 | **Fold in advance** (预先弃牌) | you're done with this hand — it checks while checking is free, and folds the moment someone bets |
 | **Call everything** (默认全跟) | call whatever comes, all hand |
 | **Call this street** (跟当前轮次) | call for the rest of this street only, then the controls come back |
+| **Follow the coach** (本轮跟随 AI) | do whatever [the coach](#the-coach) says for the rest of this street — re-read each turn, not fixed at arming time |
 
 In the browser these are buttons you can hit **while someone else is still
 thinking** — the point of folding in advance. The commitment covers the hand it
@@ -306,6 +364,7 @@ holdem/                shared core — no front-end code
   cards.py             deck + cards
   evaluator.py         best 5-card hand, side-pot ranking, fast 7-card ranker
   odds.py              Monte-Carlo equity + per-category chances (your seat only)
+  advisor.py           the coach: reads opponents, advises, owns the result
   brains.py            LLM + heuristic decision-making (the personalities)
   players.py           human + AI seats (incl. the autopilot commitments)
   game.py              the No-Limit engine (betting, pots, showdowns, chat)
