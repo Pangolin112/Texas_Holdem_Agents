@@ -12,8 +12,9 @@ from ..players import ALL_IN, CALL, CHECK, FOLD, RAISE
 from .constants import ADVISOR, GRADE_WORDS, RANGE_EQUITY_BUDGET
 from .heuristic import HeuristicAdvisor, verdict_tone
 from .prompts import (ADVISE_SYSTEM, DEFIANCE_SYSTEM, REVIEW_SYSTEM,
-                      SEND_OFF_SYSTEM, VERDICT_SYSTEM, _board_text,
-                      _one_sentence, build_advice_prompt, build_review_prompt,
+                      SEND_OFF_SYSTEM, VERDICT_SYSTEM, _EARNED_EDGE,
+                      _board_text, _mode_note, _one_sentence,
+                      build_advice_prompt, build_review_prompt,
                       build_verdict_prompt)
 
 
@@ -23,18 +24,30 @@ class LLMAdvisor(ModelCaller):
 
     is_llm = True
 
-    def __init__(self, client, model, rng, lang="en",
+    def __init__(self, client, model, rng, lang="en", mode="standard",
                  range_budget=RANGE_EQUITY_BUDGET):
         super().__init__(client, model)
         self.rng = rng
         self.lang = lang
+        self.mode = mode   # who it's coaching: "beginner" / "standard" / "pro"
         self.fallback = HeuristicAdvisor(rng, lang, range_budget)
         self._warned = False
 
-    def advise(self, view, odds_payload):
-        base = self.fallback.advise(view, odds_payload)
+    def _system(self, template):
+        return (template.format(name=ADVISOR["name"], style=ADVISOR["style"],
+                                edge=_EARNED_EDGE)
+                + _mode_note(self.mode) + _lang_note(self.lang))
+
+    def base_advice(self, view, odds_payload):
+        """The instant arithmetic call on the spot — what the panel shows the
+        moment the turn arrives, before the model has said anything."""
+        return self.fallback.advise(view, odds_payload)
+
+    def refine(self, view, odds_payload, base):
+        """The model's second opinion on `base`, or None when it has none
+        (offline, API failure, unparseable reply) — then the base stands."""
         if self.client is None:
-            return base
+            return None
         ui.thinking(ADVISOR["name"])
         try:
             # _merge stays INSIDE the try: the model can hand back junk in any
@@ -48,7 +61,15 @@ class LLMAdvisor(ModelCaller):
                 ui.warn("the coach's uplink glitched (%s: %s) — advising on instinct."
                         % (type(exc).__name__, str(exc)[:100]))
                 self._warned = True
+            return None
+
+    def advise(self, view, odds_payload):
+        """The one-shot synchronous path: base plus refinement in one call.
+        The live game uses base_advice/refine so the player never waits."""
+        base = self.base_advice(view, odds_payload)
+        if self.client is None:
             return base
+        return self.refine(view, odds_payload, base) or base
 
     def _merge(self, base, data, view):
         """Take the model's call, but keep it legal and keep the arithmetic —
@@ -91,8 +112,7 @@ class LLMAdvisor(ModelCaller):
 
     def _ask_advice(self, view, odds_payload, base):
         messages = [
-            {"role": "system", "content": ADVISE_SYSTEM.format(
-                name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+            {"role": "system", "content": self._system(ADVISE_SYSTEM)},
             {"role": "user", "content": build_advice_prompt(view, odds_payload, base)},
         ]
         raw = self._create(messages, json_mode=True, effort="low")
@@ -107,8 +127,7 @@ class LLMAdvisor(ModelCaller):
             return self.fallback.verdict(context)
         try:
             messages = [
-                {"role": "system", "content": VERDICT_SYSTEM.format(
-                    name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+                {"role": "system", "content": self._system(VERDICT_SYSTEM)},
                 {"role": "user", "content": build_verdict_prompt(context, tone)},
             ]
             line = _one_sentence(self._create(messages, json_mode=False, effort="low"))
@@ -141,8 +160,7 @@ class LLMAdvisor(ModelCaller):
             lines.append("")
             lines.append("Walk them out. 2-4 spoken sentences.")
             messages = [
-                {"role": "system", "content": SEND_OFF_SYSTEM.format(
-                    name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+                {"role": "system", "content": self._system(SEND_OFF_SYSTEM)},
                 {"role": "user", "content": "\n".join(lines)},
             ]
             raw = self._create(messages, json_mode=False, effort="low")
@@ -159,8 +177,7 @@ class LLMAdvisor(ModelCaller):
             return self.fallback.review(ctx)
         try:
             messages = [
-                {"role": "system", "content": REVIEW_SYSTEM.format(
-                    name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+                {"role": "system", "content": self._system(REVIEW_SYSTEM)},
                 {"role": "user", "content": build_review_prompt(ctx)},
             ]
             raw = self._create(messages, json_mode=False, effort="low")
@@ -180,8 +197,7 @@ class LLMAdvisor(ModelCaller):
             if action.kind == RAISE and action.amount:
                 did = "raise to %d" % action.amount
             messages = [
-                {"role": "system", "content": DEFIANCE_SYSTEM.format(
-                    name=ADVISOR["name"], style=ADVISOR["style"]) + _lang_note(self.lang)},
+                {"role": "system", "content": self._system(DEFIANCE_SYSTEM)},
                 {"role": "user", "content":
                     ("You said: %s. They did: %s.\nBoard: %s. Pot: %d.\nYour line was: \"%s\"\n\n"
                      "React in one sentence."

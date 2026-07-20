@@ -14,6 +14,7 @@ from .model_chain import ModelChain, _is_model_error
 from .personalities import _lang_note
 from .prompts import (SYSTEM_TEMPLATE, CHAT_SYSTEM_TEMPLATE, EXPLAIN_SYSTEM_TEMPLATE,
                       BUY_SYSTEM_TEMPLATE, format_chat, build_user_prompt)
+from .skill import skill_level
 from .speech import reconcile_action
 
 
@@ -83,10 +84,11 @@ class LLMBrain(ModelCaller, Brain):
 
     def __init__(self, client: Any, model: "str | ModelChain",
                  personality: dict[str, Any], rng: random.Random,
-                 lang: str = "en") -> None:
+                 lang: str = "en", skill: "str | dict" = "standard") -> None:
         super().__init__(client, model)
         self.p = personality
         self.lang = lang
+        self.skill = skill_level(skill)
         self.fallback = HeuristicBrain(personality, rng, lang)
         self._warned = False
 
@@ -152,10 +154,10 @@ class LLMBrain(ModelCaller, Brain):
         messages = [
             {"role": "system",
              "content": SYSTEM_TEMPLATE.format(name=player.name, style=self.p["style"])
-                        + _lang_note(self.lang)},
-            {"role": "user", "content": build_user_prompt(player, view)},
+                        + self.skill["note"] + _lang_note(self.lang)},
+            {"role": "user", "content": build_user_prompt(player, view, self.skill)},
         ]
-        return self._create(messages)
+        return self._create(messages, effort=self.skill["effort"])
 
     def _one_liner(self, player, body):
         messages = [

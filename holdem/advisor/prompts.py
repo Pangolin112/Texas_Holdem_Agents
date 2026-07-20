@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from ..brains.prompts import format_profiles
 from ..players import RAISE
 from .constants import GRADE_WORDS
 
@@ -17,7 +18,35 @@ Respond with JSON only:
   "reasoning": "<2-3 sentences: the price, the read, the decision>",
   "reads": [{{"name": "<opponent>", "note": "<short read on their likely range>"}}]}}
 
-Be concrete about the money. The maths matters more than your gut, but a table that is screaming at you is real information the maths does not have — say when you're overriding the number and why. Never hedge into uselessness: pick one action."""
+Be concrete about the money. The maths matters more than your gut, but a table that is screaming at you is real information the maths does not have — say when you're overriding the number and why. Never hedge into uselessness: pick one action.
+
+The player sat down to PLAY. Preflop, respect the starting-hand yardstick you're given: a playable hand getting a cheap price is a call or a raise, not a fold — multiway equity against random hands understates it badly, because most of those hands fold long before the river. Save the discipline for real money against real strength, and when a spot is close, lean toward the disciplined aggressive line over the nitty one."""
+
+
+# Who the coach is talking to. Appended to every system prompt, like the
+# language note — "standard" adds nothing.
+MODE_NOTES = {
+    "beginner": "\n\nYour player is brand new to poker. Coach like a patient "
+        "teacher: plain words, and the moment you use a poker term, explain it "
+        "in one short clause — e.g. 'pot odds — the share of the pot you'd be "
+        "paying', 'the flop — the first three shared cards'. Tie advice to "
+        "what's on their screen: the Fold / Check / Call / Raise buttons and "
+        "the raise slider. One idea at a time; never assume they know the "
+        "jargon.",
+    "pro": "\n\nYour player is experienced. Coach at full density: ranges and "
+        "combos, blockers, sizing and stack-to-pot ratio, what each line "
+        "represents, and the plan for later streets. Skip every basic — no "
+        "term needs explaining, no hand-holding.",
+}
+
+
+def _mode_note(mode):
+    return MODE_NOTES.get(mode, "")
+
+
+# Sharpness policy, shared by every talking prompt: the coach may needle, but
+# only off the evidence in front of it.
+_EARNED_EDGE = " Sharpness must be earned: needle them only when the record in front of you shows the same mistake more than once; otherwise stay dry, fair and constructive."
 
 VERDICT_SYSTEM = """You are {name}, {style}. The hand just ended. You told the player what to do; now you find out whether you were right.
 
@@ -27,21 +56,21 @@ Say ONE short sentence to them, out loud. Match the tone you're given:
 - humbled: you were WRONG. Own it — self-deprecating, no excuses, no lecturing.
 - shrug: nothing conclusive. Don't manufacture drama.
 
-Never explain at length, never moralize, never repeat the numbers back. One sentence. No JSON, no quotes around it."""
+Never explain at length, never moralize, never repeat the numbers back.{edge} One sentence. No JSON, no quotes around it."""
 
 DEFIANCE_SYSTEM = """You are {name}, {style}. You just told the player what to do and they did something else, right in front of you.
 
-Say ONE short sentence reacting to what they actually did. Dry, not preachy — you'll find out soon enough who was right. No JSON, no quotes."""
+Say ONE short sentence reacting to what they actually did. Dry, not preachy — you'll find out soon enough who was right.{edge} No JSON, no quotes."""
 
 SEND_OFF_SYSTEM = """You are {name}, {style}. The player is standing up from the table — the session is over, and this is your closing statement as you walk them out.
 
-Speak 2-4 short sentences: the night in one honest line, the one thing they genuinely did well, the one habit that needs fixing (only if their record shows one), and a send-off worth remembering. Warm, dry, in character. Never recite the numbers back, no lists, no JSON, no quotes."""
+Speak 2-4 short sentences: the night in one honest line, the one thing they genuinely did well, the one habit that needs fixing (only if their record shows one), and a send-off worth remembering. Warm, dry, in character.{edge} Never recite the numbers back, no lists, no JSON, no quotes."""
 
 REVIEW_SYSTEM = """You are {name}, {style}. The hand is over and you are debriefing your player — not one move, the whole hand.
 
 You get every decision you advised on: what you said, what they did, and a process grade computed from the numbers at the time ("fine" means the move was correct). You also get their running record for the session.
 
-Write 2-3 short spoken sentences. Judge the PROCESS, never the result — a correct call that lost money was still correct, and when that happened you say so out loud. Pick the ONE thing most worth fixing (or praising) this hand. If the session record shows the same mistake repeating, name the habit plainly. Don't recite the numbers back, don't make lists, don't lecture. No JSON, no quotes."""
+Write 2-3 short spoken sentences. Judge the PROCESS, never the result — a correct call that lost money was still correct, and when that happened you say so out loud. Pick the ONE thing most worth fixing (or praising) this hand. If the session record shows the same mistake repeating, name the habit plainly.{edge} Don't recite the numbers back, don't make lists, don't lecture. No JSON, no quotes."""
 
 
 def _one_sentence(raw):
@@ -93,6 +122,13 @@ def build_advice_prompt(view, odds_payload, base):
     lines.append("What each live opponent has DONE this hand, and what a Bayesian "
                  "read of it says they hold:")
     lines.append(format_actions(view["actions"], view["players"], base["reads"]))
+    live = {p["name"] for p in view["players"]
+            if not p["is_hero"] and not p["folded"]}
+    book = [r for r in view.get("profiles") or [] if r["name"] in live]
+    if book:
+        lines.append("")
+        lines.append("Tonight's book on them (the public record, across hands):")
+        lines.append(format_profiles(book))
     lines.append("")
     if base.get("vs_range"):
         lines.append("Against random hands they win %.0f%%. Re-simulated against the "
@@ -102,6 +138,15 @@ def build_advice_prompt(view, odds_payload, base):
     else:
         lines.append("They win %.0f%% against random hands (%.0f%% once the read is "
                      "taken into account)." % (base["equity"] * 100, base["adjusted"] * 100))
+    if base.get("preflop_tier") is not None:
+        tier_word = {3: "premium", 2: "strong", 1: "playable",
+                     0: "junk"}[base["preflop_tier"]]
+        lines.append("PREFLOP YARDSTICK: their starting hand is %s, and the call "
+                     "costs %.1f big blinds. The multiway simulation above "
+                     "understates playable hands preflop (most opponents fold "
+                     "before the river) — your arithmetic priced the decision on "
+                     "the starting hand, not on that number. Do the same."
+                     % (tier_word, base.get("preflop_cost") or 0.0))
     lines.append("Your own arithmetic says: %s%s, against a %.0f%% price."
                  % (base["action"],
                     (" to %d" % base["amount"]) if base["amount"] else "",

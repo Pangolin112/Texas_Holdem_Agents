@@ -54,6 +54,25 @@ Respond with ONE JSON object and nothing else:
 {{"buy": <integer chips to buy, 0 to skip, at most {cap}>}}"""
 
 
+def format_profiles(profiles):
+    """The public book on each player, one line apiece — session-long counts
+    of what everyone at the table could see for themselves, plus what they
+    showed at showdowns. Fed to seats (by skill level) and to the coach."""
+    lines = []
+    for r in profiles:
+        bits = ["dealt %d hands, played %d" % (r["hands"], r["vpip"])]
+        if r.get("pfr"):
+            bits.append("raised first in %d" % r["pfr"])
+        bits.append("%d bets/raises vs %d calls" % (r["raises"], r["calls"]))
+        if r.get("allins"):
+            bits.append("%d all-ins" % r["allins"])
+        line = "- %s: %s." % (r["name"], "; ".join(bits))
+        for note in r.get("showdowns") or []:
+            line += "\n    " + note
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def format_chat(chat):
     lines = []
     for speaker, to, text in chat[-10:]:
@@ -75,7 +94,9 @@ def format_history(history):
     return "\n".join(lines) if lines else "(no action yet)"
 
 
-def build_user_prompt(player, view):
+def build_user_prompt(player, view, skill=None):
+    from .skill import skill_level
+    skill = skill_level(skill)
     hero = view["hero"]
     board_txt = " ".join(str(c) for c in view["board"]) if view["board"] else "(none yet)"
     hole_txt = " ".join(str(c) for c in hero["hole"])
@@ -98,7 +119,15 @@ def build_user_prompt(player, view):
         seats.append("- %s%s: stack %d%s — %s" % (pl["name"], tag_txt, pl["stack"], debt_txt, status))
 
     chat_txt = format_chat(view["chat"])
-    memory_txt = "\n".join(view["memory"][-5:]) or "(this is the first hand)"
+    memory_txt = ("\n".join(view["memory"][-skill["memory"]:])
+                  or "(this is the first hand)")
+
+    profiles_txt = ""
+    if skill["profiles"]:
+        book = format_profiles(view.get("profiles") or [])
+        if book:
+            profiles_txt = ("\n\nYour book on each player tonight (what you've "
+                            "seen them do — use it):\n" + book)
 
     made_line = ""
     if view.get("hero_hand_hint"):
@@ -106,6 +135,10 @@ def build_user_prompt(player, view):
 
     if view["to_call"] == 0:
         call_line = "Nothing to call — you may check."
+    elif not skill["pot_odds"]:
+        # A casual player doesn't price their calls — don't do it for them.
+        call_line = ("To call: %d (folding costs nothing, calling costs %d)."
+                     % (view["to_call"], min(view["to_call"], hero["stack"])))
     else:
         odds = 100.0 * view["to_call"] / (view["pot"] + view["to_call"])
         call_line = ("To call: %d (folding costs nothing, calling costs %d — "
@@ -135,7 +168,7 @@ Recent table talk:
 {chat}
 
 Earlier hands this session:
-{memory}
+{memory}{profiles}
 
 What do you do? Respond with the JSON object only.""".format(
         hand_no=view["hand_no"], street=view["street"],
@@ -144,4 +177,4 @@ What do you do? Respond with the JSON object only.""".format(
         stack=hero["stack"], bet_street=hero["bet_street"], committed=hero["committed"],
         call_line=call_line, raise_line=raise_line,
         seats="\n".join(seats), history=format_history(view["history"]),
-        chat=chat_txt, memory=memory_txt)
+        chat=chat_txt, memory=memory_txt, profiles=profiles_txt)

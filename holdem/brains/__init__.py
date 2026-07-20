@@ -14,7 +14,9 @@ from .personalities import PERSONALITIES, LANGUAGE_NOTES, _lang_note
 from .policy import _softmax, PolicyBrain, preflop_strength
 from .heuristic import HeuristicBrain
 from .prompts import (SYSTEM_TEMPLATE, CHAT_SYSTEM_TEMPLATE, EXPLAIN_SYSTEM_TEMPLATE,
-                      BUY_SYSTEM_TEMPLATE, format_chat, format_history, build_user_prompt)
+                      BUY_SYSTEM_TEMPLATE, format_chat, format_history,
+                      format_profiles, build_user_prompt)
+from .skill import SKILL_LEVELS, skill_level
 from .speech import _blocked, spoken_action, reconcile_action
 from .llm import ModelCaller, LLMBrain
 
@@ -24,7 +26,9 @@ __all__ = [
     "_softmax", "PolicyBrain", "preflop_strength",
     "HeuristicBrain",
     "SYSTEM_TEMPLATE", "CHAT_SYSTEM_TEMPLATE", "EXPLAIN_SYSTEM_TEMPLATE",
-    "BUY_SYSTEM_TEMPLATE", "format_chat", "format_history", "build_user_prompt",
+    "BUY_SYSTEM_TEMPLATE", "format_chat", "format_history", "format_profiles",
+    "build_user_prompt",
+    "SKILL_LEVELS", "skill_level",
     "_blocked", "spoken_action", "reconcile_action",
     "ModelCaller", "LLMBrain",
 ]

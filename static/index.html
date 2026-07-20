@@ -40,6 +40,20 @@
         <input id="opt-model" type="text" list="model-suggestions" autocomplete="off">
       </label>
       <datalist id="model-suggestions"></datalist>
+      <label><span data-i18n="lbl_difficulty">AI difficulty</span>
+        <select id="opt-difficulty">
+          <option value="casual" data-i18n="diff_casual">Casual — they play by feel</option>
+          <option value="standard" selected data-i18n="diff_standard">Standard</option>
+          <option value="shark" data-i18n="diff_shark">Shark — they remember and exploit</option>
+        </select>
+      </label>
+      <label><span data-i18n="lbl_coach_style">Coach style</span>
+        <select id="opt-coach-style">
+          <option value="beginner" data-i18n="cs_beginner">Beginner — explains every term</option>
+          <option value="standard" selected data-i18n="cs_standard">Standard</option>
+          <option value="pro" data-i18n="cs_pro">Pro — ranges and sizing</option>
+        </select>
+      </label>
     </div>
 
     <div class="check-row">

@@ -1,10 +1,36 @@
 """The coach's integration into the hand: live equity reads, per-turn advice,
-grading what the player actually did, and the post-hand debrief."""
+grading what the player actually did, and the post-hand debrief.
+
+The coach never blocks the game. Its work runs in a background task that
+starts the moment a street begins (while the other seats are still acting),
+and its output is published into the player's turn whenever it lands — the
+instant arithmetic first, the model's refinement on top. The player can act
+at any point; whatever the coach hadn't said yet is simply dropped.
+"""
 
 from __future__ import annotations
 
+import threading
+
 from .. import advisor, evaluator, odds, ui
-from ..players import FOLD
+from ..players import AUTO_ADVISOR, FOLD
+
+
+class _AdviceTask:
+    """One background run of the coach on one specific spot."""
+
+    def __init__(self, key, view, payload, hand_no):
+        self.key = key            # (hand, street, to_call, pot, live seats)
+        self.view = view          # the snapshot the advice is computed from
+        self.payload = payload    # the odds the advice is computed from
+        self.hand_no = hand_no
+        self.base = None          # the instant arithmetic call
+        self.refined = None       # the model's refinement, when it lands
+        self.published = None     # last advice object actually shown
+        self.publish_view = None  # the live turn's view, once the turn claims us
+        self.entry = None         # the advice_log entry created on publication
+        self.cancelled = False
+        self.done = threading.Event()
 
 
 class CoachMixin:
@@ -45,41 +71,164 @@ class CoachMixin:
 
     # ------------------------------------------------------------ the coach
 
-    def update_hero_advice(self, view):
-        """Ask the coach to call this exact spot, and show what it says.
+    def _advice_async(self):
+        """True when the coach thinks over the wire — then it runs in the
+        background. The arithmetic-only coach is instant and stays inline,
+        which also keeps offline games (and the test suite) deterministic."""
+        adv = self.advisor
+        return (adv is not None and getattr(adv, "is_llm", False)
+                and getattr(adv, "client", None) is not None)
 
-        Returns the advice so the turn can act on it (the follow button, the
-        autopilot) and so we can tell afterwards whether it was taken.
+    def _spot_key(self, view):
+        live = tuple(sorted(p["name"] for p in view["players"]
+                            if not p["is_hero"] and not p["folded"]))
+        return (self.hand_no, view["street"], view["to_call"], view["pot"], live)
+
+    def prewarm_advice(self):
+        """Start the coach on the human's spot the moment a street begins —
+        while the seats in front are still acting. If the action reaches the
+        human unchanged (folds and checks don't change the spot), the answer
+        is already there; if someone raises, the turn just starts a fresh one.
+        """
+        if not self._advice_async() or self.hero_odds_payload is None:
+            return
+        human = self.human
+        if (human is None or human not in self.hand_players or human.folded
+                or human.all_in or self.hero_out()):
+            return
+        self._start_advice_task(self.build_view(human))
+
+    def _start_advice_task(self, view):
+        task = _AdviceTask(self._spot_key(view), view, self.hero_odds_payload,
+                           self.hand_no)
+        with self.advice_lock:
+            if self._advice_task is not None:
+                self._advice_task.cancelled = True
+            self._advice_task = task
+        sink = ui.get_sink()  # the worker reports through this thread's sink
+        threading.Thread(target=self._run_advice_task, args=(task, sink),
+                         daemon=True).start()
+        return task
+
+    def _run_advice_task(self, task, sink):
+        ui.set_sink(sink)
+        try:
+            task.base = self.advisor.base_advice(task.view, task.payload)
+            with self.advice_lock:
+                self._maybe_publish(task)   # the turn may already be waiting
+            if task.cancelled or task.base is None:
+                return
+            refined = self.advisor.refine(task.view, task.payload, task.base)
+            if refined is not None:
+                task.refined = refined
+                with self.advice_lock:
+                    self._maybe_publish(task)
+        except Exception:
+            pass  # a failed coach run must never take the table down
+        finally:
+            task.done.set()
+            ui.set_sink(None)
+
+    def _maybe_publish(self, task):
+        """Show the task's best answer on the pending turn. Caller holds
+        advice_lock. Publishes at most once per distinct result: the base as
+        soon as the turn claims the task, the refinement when it lands — and
+        nothing at all once the player has already acted."""
+        if task.cancelled or task is not self._advice_task:
+            return
+        view = task.publish_view
+        if view is None:
+            return  # the turn hasn't arrived — hold the answer until it does
+        if task.hand_no != self.hand_no or not self.hand_live:
+            return
+        source = task.refined or task.base
+        if source is None or source is task.published:
+            return
+        if task.entry is not None and task.entry["action"] is not None:
+            return  # they've already moved; don't rewrite history
+        task.published = source
+        advice = dict(source)
+        # Carry the command that enacts it, so the follow button, the autopilot
+        # and the terminal can't drift into following it three different ways.
+        advice["command"] = advisor.advice_command(advice)
+        if task.entry is None:
+            task.entry = {"street": self.street, "advice": advice,
+                          "action": None, "desc": None, "followed": None}
+            self.advice_log.append(task.entry)
+        else:
+            task.entry["advice"] = advice
+        self.hero_advice = advice
+        view["advice"] = advice
+        ui.advice(advice)
+
+    def update_hero_advice(self, view):
+        """Get the coach onto this exact spot without making the player wait.
+
+        Synchronous (and unchanged) for the arithmetic coach; for the model
+        coach it claims the background task started at the top of the street —
+        or starts a fresh one if the spot changed — and returns immediately.
+        The answer is published into `view` and the panel whenever it lands.
+        The one deliberate exception: with follow-the-coach armed, the move IS
+        the coach's answer, so that path waits for it.
         """
         if self.advisor is None or self.hero_odds_payload is None:
             return None
+        if not self._advice_async():
+            return self._advise_sync(view)
+        key = self._spot_key(view)
+        with self.advice_lock:
+            self.hero_advice = None   # never leave last street's call armable
+            task = self._advice_task
+            if task is not None and (task.cancelled or task.key != key):
+                task.cancelled = True
+                task = None
+        if task is None:
+            task = self._start_advice_task(view)
+        with self.advice_lock:
+            task.publish_view = view
+            self._maybe_publish(task)
+        human = self.human
+        if human is not None and getattr(human, "auto", None) == AUTO_ADVISOR:
+            # Delegation: "do whatever the coach says" has to hear the coach.
+            task.done.wait(timeout=30.0)
+            with self.advice_lock:
+                self._maybe_publish(task)
+        return view.get("advice")
+
+    def _advise_sync(self, view):
+        """The inline path: ask, log, show — exactly the old behavior."""
         advice = self.advisor.advise(view, self.hero_odds_payload)
         if advice is None:
             return None
-        # Carry the command that enacts it, so the follow button, the autopilot
-        # and the terminal can't drift into following it three different ways.
         advice["command"] = advisor.advice_command(advice)
         self.hero_advice = advice
         self.advice_log.append({"street": self.street, "advice": advice,
                                 "action": None, "desc": None, "followed": None})
         ui.advice(advice)
+        view["advice"] = advice
         return advice
 
     def note_hero_move(self, view, action, desc):
         """Record what the player actually did against what they were told —
         and if they went their own way, let the coach say so now rather than
         pretend it didn't notice."""
-        if not self.advice_log:
-            return
-        entry = self.advice_log[-1]
-        if entry["action"] is not None:
-            return  # this advice has already been answered
-        advice = entry["advice"]
-        entry["action"] = action
-        entry["desc"] = desc
-        entry["followed"] = advisor.followed_advice(advice, action)
-        if entry["followed"] or self.advisor is None:
-            return
+        with self.advice_lock:
+            if self._advice_task is not None:
+                # The spot dies with the move: whatever the coach hadn't said
+                # yet is about a street state that no longer exists.
+                self._advice_task.cancelled = True
+            if not self.advice_log:
+                return
+            entry = self.advice_log[-1]
+            if entry["action"] is not None:
+                return  # this advice has already been answered
+            advice = entry["advice"]
+            entry["action"] = action
+            entry["desc"] = desc
+            entry["followed"] = advisor.followed_advice(advice, action)
+            if entry["followed"] or self.advisor is None:
+                return
+        # The defiance line can be a model call — never make it under the lock.
         line = self.advisor.on_defiance(advice, action, view)
         if line:
             ui.advisor_line(line, "defiance")

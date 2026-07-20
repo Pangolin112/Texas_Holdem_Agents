@@ -1361,6 +1361,148 @@ def test_advice_carries_the_numbers_it_reasoned_from():
     ok(a["source"] == "instinct", "and it says where the advice came from")
 
 
+def test_preflop_advice_prices_the_starting_hand():
+    """The first-hand overfold fix: preflop is priced on the starting hand's
+    tier, not on multiway equity vs random opponents (which folds ~everything)."""
+    coach = _fast_coach(seed=5)
+
+    def preflop(hole, to_call=20, pot=30, **kw):
+        view = _aview(to_call=to_call, pot=pot, street="PREFLOP", board="", **kw)
+        view["blinds"] = (10, 20)
+        view["hero"]["hole"] = cards(hole)
+        # 17%: exactly the multiway number that used to trigger a nit-fold.
+        return coach.advise(view, _odds(0.17))
+
+    a = preflop("Ah Ad")
+    ok(a["action"] in (RAISE, ALL_IN), "aces raise preflop, whatever the multiway sim says")
+    a = preflop("Ah Ks")
+    ok(a["action"] in (RAISE, ALL_IN), "ace-king raises too — the old score buried it below mid pairs")
+    a = preflop("9h 8h")
+    ok(a["action"] == CALL, "a suited connector calls one blind even at 17% multiway equity")
+    ok(a["preflop_tier"] is not None, "and the advice carries the yardstick it was priced on")
+    a = preflop("9h 8h", to_call=200, pot=230)
+    ok(a["action"] == FOLD, "...but not ten blinds")
+    a = preflop("7d 2c", to_call=60, pot=90)
+    ok(a["action"] == FOLD, "junk still folds to a raise")
+    a = preflop("Ah Ad", to_call=600, pot=630)
+    ok(a["action"] in (RAISE, ALL_IN), "aces never fold to a huge 3-bet")
+
+    grade = advisor.grade_decision
+    playable = {"preflop_tier": 1, "preflop_cost": 1.0, "to_call": 20,
+                "adjusted": 0.17, "pot_odds": 0.4, "action": CALL}
+    ok(grade(playable, Action(CALL)) is None,
+       "a correct preflop defend is no longer booked as a loose call")
+    premium_fold = {"preflop_tier": 3, "preflop_cost": 3.0, "to_call": 60,
+                    "adjusted": 0.4, "pot_odds": 0.4, "action": RAISE}
+    ok(grade(premium_fold, Action(FOLD)) == advisor.GRADE_SCARED_FOLD,
+       "folding a premium hand preflop is graded as the scared fold it is")
+
+
+def test_style_ledger_books_only_public_moves():
+    """The session book every brain reads: counts of what the table saw."""
+    p = [ScriptedPlayer("P0", 1000, [Action(RAISE, 140)] + [Action(CHECK)] * 3),
+         ScriptedPlayer("P1", 1000, [Action(FOLD)]),
+         ScriptedPlayer("P2", 1000, [Action(FOLD)]),
+         ScriptedPlayer("P3", 1000, [Action(RAISE, 60), Action(CALL)] + [Action(CHECK)] * 3)]
+    game = make_game(p)
+    game.play_hand()
+    s = game.style_stats
+    ok(all(s[n]["hands"] == 1 for n in ("P0", "P1", "P2", "P3")),
+       "everyone dealt in is booked a hand")
+    ok(s["P0"]["raises"] == 1 and s["P3"]["raises"] == 1, "raises are counted")
+    ok(s["P3"]["calls"] == 1, "calls are counted")
+    ok(s["P1"]["folds"] == 1 and s["P2"]["folds"] == 1, "folds are counted")
+    ok(s["P0"]["vpip"] == 1 and s["P3"]["vpip"] == 1 and s["P1"]["vpip"] == 0,
+       "vpip books who voluntarily put chips in preflop — blinds don't count")
+    ok(s["P0"]["pfr"] == 1 and s["P3"]["pfr"] == 1, "preflop raisers are booked")
+    ok(s["P0"]["showdowns"] and "showed" in s["P0"]["showdowns"][0],
+       "a showdown books what was actually shown")
+    ok("after betting/raising" in s["P0"]["showdowns"][0],
+       "...and whether they'd been the aggressor")
+    ok(not s["P1"]["showdowns"], "a folded hand shows nothing")
+
+    # One hand of anything reads as nothing; the book opens on the second.
+    ok(game.style_profiles(p[0]) == [], "profiles need at least two hands seen")
+    for name in ("P1", "P2", "P3"):
+        game._style(name)["hands"] = 2
+    rows = game.style_profiles(p[0])
+    ok({r["name"] for r in rows} == {"P1", "P2", "P3"},
+       "the book covers everyone except the reader")
+
+
+def test_model_coach_never_blocks_the_turn():
+    """The async coach: the turn returns before the model has answered, the
+    refinement is published while the player thinks, and a refinement landing
+    after the move is dropped instead of rewriting the log."""
+    import threading
+
+    class SlowCoach:
+        is_llm = True
+        client = object()          # marks the async (model) path
+
+        def __init__(self):
+            self.release = threading.Event()
+
+        def base_advice(self, view, payload):
+            return {"action": CALL, "amount": 0, "confidence": 0.5,
+                    "source": "instinct", "reads": [], "equity": 0.5,
+                    "adjusted": 0.5, "pot_odds": 0.2, "to_call": 20,
+                    "pot": 100, "line": "call it", "danger": 2}
+
+        def refine(self, view, payload, base):
+            self.release.wait(timeout=5)
+            return dict(base, action=RAISE, amount=120, source="llm")
+
+        def on_defiance(self, advice, action, view):
+            return None
+
+    import time
+
+    def fresh():
+        game = make_game([ScriptedPlayer("A", 1000), ScriptedPlayer("B", 1000)])
+        game.hand_no = 1
+        game.street = "FLOP"
+        coach = SlowCoach()
+        game.advisor = coach
+        game.hero_odds_payload = {"equity": 0.5}
+        game.hand_live = True
+        view = {"street": game.street, "to_call": 20, "pot": 100,
+                "players": [{"name": "A", "is_hero": True, "folded": False},
+                            {"name": "B", "is_hero": False, "folded": False}]}
+        return game, coach, view
+
+    def wait_for_base(view):
+        deadline = time.time() + 5
+        while "advice" not in view and time.time() < deadline:
+            time.sleep(0.01)
+
+    # 1. The turn is never blocked: update_hero_advice returns while the model
+    #    is still thinking; the arithmetic call lands right away, the model's
+    #    refinement afterwards.
+    game, coach, view = fresh()
+    game.update_hero_advice(view)   # returns with the refine still blocked
+    wait_for_base(view)
+    ok(view["advice"]["action"] == CALL,
+       "the turn gets the instant arithmetic call, not a blank")
+    ok(game.advice_log[-1]["advice"]["action"] == CALL, "and it is logged")
+    coach.release.set()
+    game._advice_task.done.wait(timeout=5)
+    ok(view["advice"]["action"] == RAISE,
+       "the model's refinement is published into the live turn")
+    ok(game.advice_log[-1]["advice"]["action"] == RAISE,
+       "...and into the log the debrief will read")
+
+    # 2. A refinement that lands after the player moved is dropped.
+    game, coach, view = fresh()
+    game.update_hero_advice(view)
+    wait_for_base(view)
+    game.note_hero_move(view, Action(CALL), "calls 20")
+    coach.release.set()
+    game._advice_task.done.wait(timeout=5)
+    ok(game.advice_log[-1]["advice"]["action"] == CALL,
+       "advice published after the move never rewrites what was shown")
+
+
 def test_decision_grades_judge_process_not_results():
     grade = advisor.grade_decision
     ahead = {"to_call": 100, "adjusted": 0.50, "pot_odds": 0.30, "action": CALL, "amount": 0}
@@ -1974,6 +2116,9 @@ if __name__ == "__main__":
     test_advice_is_always_legal()
     test_advice_prices_real_hands_end_to_end()
     test_advice_carries_the_numbers_it_reasoned_from()
+    test_preflop_advice_prices_the_starting_hand()
+    test_style_ledger_books_only_public_moves()
+    test_model_coach_never_blocks_the_turn()
     test_fast_forward_flags_only_a_folded_hero()
     test_fast_forward_never_touches_the_model()
     test_no_commentary_on_a_hand_the_player_left()

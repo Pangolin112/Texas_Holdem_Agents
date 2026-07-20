@@ -106,6 +106,13 @@ def build_game(options):
     fast_forward = options.get("fast", True) is not False
     # Table language: what the agents speak ("zh" = Chinese, default English).
     lang = "zh" if str(options.get("language") or "").lower().startswith("zh") else "en"
+    # How sharp the seats play, and who the coach thinks it's talking to.
+    difficulty = str(options.get("difficulty") or "standard").lower()
+    if difficulty not in ("casual", "standard", "shark"):
+        difficulty = "standard"
+    coach_style = str(options.get("coach_style") or "standard").lower()
+    if coach_style not in ("beginner", "standard", "pro"):
+        coach_style = "standard"
 
     roster = rng.sample(PERSONALITIES, count)
     players = [HumanPlayer(name, stack)]
@@ -113,13 +120,15 @@ def build_game(options):
         if offline:
             brain = HeuristicBrain(personality, rng, lang=lang)
         else:
-            brain = LLMBrain(client, model_chain, personality, rng, lang=lang)
+            brain = LLMBrain(client, model_chain, personality, rng, lang=lang,
+                             skill=difficulty)
         players.append(LLMPlayer(personality["name"], stack, personality, brain))
 
     coach = None
     if want_coach:
         coach = (HeuristicAdvisor(rng, lang=lang) if offline
-                 else LLMAdvisor(client, model_chain, rng, lang=lang))
+                 else LLMAdvisor(client, model_chain, rng, lang=lang,
+                                 mode=coach_style))
 
     game = TexasHoldemGame(players, sb=sb, bb=bb, rng=rng, reveal_all=reveal_all,
                            language=lang, show_odds=show_odds, advisor=coach,
@@ -134,6 +143,8 @@ def build_game(options):
         "odds": show_odds,
         "coach": coach is not None,
         "coach_name": ADVISOR["name"],
+        "coach_style": coach_style,
+        "difficulty": difficulty,
         "fast": fast_forward,
         "language": lang,
         # natural agent voices need the API; the browser falls back to its own

@@ -42,6 +42,18 @@ class TexasHoldemGame(ChatMixin, BuyInsMixin, HandFlowMixin, CoachMixin):
         self.button_idx = 0
         self.hand_no = 0
         self.memory = []  # one-line summaries of past hands, fed to the AIs
+        # The public book on every seat: session-long counters of what each
+        # player has visibly done (hands played, raises, calls, showdowns).
+        # Built only from public moves and shown cards, and handed to every
+        # brain — the seats AND the coach read the same experience.
+        self.style_stats = {}
+        self._hand_vpip = set()   # names that voluntarily put chips in preflop
+        self._hand_pfr = set()    # names that raised preflop
+        self._hand_aggr = set()   # names that bet/raised at any point this hand
+        # The coach runs in the background so the player never waits on it:
+        # this lock guards the advice log, the current task and publication.
+        self.advice_lock = threading.Lock()
+        self._advice_task = None
         # Serializes all chat delivery. Re-entrant because a reply is delivered
         # from inside delivering the line it answers. A front-end may call
         # table_talk() from another thread (the web app lets the human speak at
@@ -97,6 +109,46 @@ class TexasHoldemGame(ChatMixin, BuyInsMixin, HandFlowMixin, CoachMixin):
             if p.name == name:
                 return p
         return None
+
+    # -------------------------------------------------- the book on everyone
+
+    def _style(self, name):
+        return self.style_stats.setdefault(name, {
+            "hands": 0, "vpip": 0, "pfr": 0, "raises": 0, "calls": 0,
+            "folds": 0, "allins": 0, "showdowns": []})
+
+    def note_style(self, p, kind):
+        """Book one public move into the session ledger on this seat. Only
+        ever fed by moves everyone at the table saw."""
+        s = self._style(p.name)
+        if kind == "fold":
+            s["folds"] += 1
+        elif kind == "call":
+            s["calls"] += 1
+            if self.street == "PREFLOP":
+                self._hand_vpip.add(p.name)
+        elif kind in ("bet", "raise", "all_in"):
+            s["raises"] += 1
+            self._hand_aggr.add(p.name)
+            if kind == "all_in":
+                s["allins"] += 1
+            if self.street == "PREFLOP":
+                self._hand_vpip.add(p.name)
+                self._hand_pfr.add(p.name)
+
+    def style_profiles(self, viewer):
+        """The book on every player except `viewer`, for a brain's prompt.
+        Nothing here that a person at the table couldn't remember: counts of
+        public moves, and cards that were actually shown."""
+        rows = []
+        for pl in self.players:
+            if pl is viewer:
+                continue
+            s = self.style_stats.get(pl.name)
+            if not s or s["hands"] < 2:
+                continue  # one hand of anything reads as nothing
+            rows.append(dict(s, name=pl.name, showdowns=list(s["showdowns"])))
+        return rows
 
     def hero_out(self):
         """True while the human has folded out of a live hand — the stretch

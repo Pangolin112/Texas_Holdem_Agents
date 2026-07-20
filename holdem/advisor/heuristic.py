@@ -30,17 +30,69 @@ def verdict_tone(context):
     return TONE_HUMBLED           # you ignored it and it worked: eat it
 
 
+def _preflop_tier(hole):
+    """A starting hand's tier, 3 (premium) .. 0 (junk).
+
+    An explicit chart instead of a threshold on `preflop_strength`: that score
+    is built for bulk range-bucketing and ranks every mid pair above AK, which
+    is fine for a posterior and wrong for a recommendation.
+    """
+    a, b = sorted((c.value for c in hole), reverse=True)
+    pair = a == b
+    suited = hole[0].suit == hole[1].suit
+    gap = a - b
+    if pair and a >= 12:
+        return 3                       # QQ+
+    if a == 14 and b >= 13:
+        return 3                       # AK
+    if pair and a >= 9:
+        return 2                       # 99-JJ
+    if a == 14 and b >= 11:
+        return 2                       # AQ, AJ
+    if a == 13 and b == 12:
+        return 2                       # KQ
+    if pair:
+        return 1                       # 22-88: set-mining hands
+    if a >= 11 and b >= 10:
+        return 1                       # broadway-ish: KJ, QJ, JT, KT, QT
+    if suited and gap <= 2 and b >= 5:
+        return 1                       # suited connectors / one-gappers, 65s up
+    if a == 14 and suited:
+        return 1                       # Axs: nut-flush potential
+    return 0
+
+
+def _preflop_danger(tier, cost):
+    """The spot's color preflop, from the hand's tier and the price in blinds."""
+    if cost <= 1.0:
+        return {3: 0, 2: 0}.get(tier, 1 if tier == 1 else 2)
+    if cost <= 4.0:
+        return {3: 0, 2: 1, 1: 2}.get(tier, 3)
+    return {3: 1, 2: 2, 1: 3}.get(tier, 4)
+
+
 class HeuristicAdvisor:
     """Your equity against their range, against the price. No API, no waiting."""
 
     is_llm = False
 
-    def __init__(self, rng, lang="en", range_budget=RANGE_EQUITY_BUDGET):
+    def __init__(self, rng, lang="en", range_budget=RANGE_EQUITY_BUDGET,
+                 mode="standard"):
         self.rng = rng
         self.lang = lang
         self.range_budget = range_budget
+        self.mode = mode   # coach audience; only the LLM advisor phrases by it
 
     # -- the recommendation ------------------------------------------------
+
+    def base_advice(self, view, odds_payload):
+        """The arithmetic call on the spot — same thing as `advise` here; the
+        LLM advisor layers its `refine` on top of this."""
+        return self.advise(view, odds_payload)
+
+    def refine(self, view, odds_payload, base):
+        """No model behind this coach — the arithmetic is the answer."""
+        return None
 
     def advise(self, view, odds_payload):
         equity = float(odds_payload["equity"])
@@ -52,13 +104,32 @@ class HeuristicAdvisor:
         pot = view["pot"]
         price = pot_odds(to_call, pot)
         stack = view["hero"]["stack"]
-
-        action, amount, key = self._choose(view, adjusted, price, to_call, pot, stack)
-        # Confidence is how far from the fence the call is — a spot where equity
-        # and price are neck and neck is a coin flip and should say so.
-        edge = abs(adjusted - price) if to_call > 0 else abs(adjusted - 0.5)
-        confidence = max(0.15, min(0.95, 0.35 + 1.6 * edge))
         threat = threat_level(reads)
+
+        tier = None
+        if view["street"] == "PREFLOP" and not view["board"]:
+            # Preflop, equity against a table of random hands is the wrong
+            # yardstick: most of those hands fold long before the river, so
+            # pricing a playable hand against five strangers folds nearly
+            # everything. Price the starting hand on its tier instead.
+            tier = _preflop_tier(view["hero"]["hole"])
+            bb = (view.get("blinds") or (0, 0))[1] or max(1, view["min_raise_to"] // 2)
+            cost = to_call / float(bb)
+            action, amount, key = self._choose_preflop(view, tier, to_call,
+                                                       stack, cost)
+            confidence = {3: 0.9, 2: 0.7, 1: 0.55, 0: 0.8}[tier]
+            danger = _preflop_danger(tier, cost)
+        else:
+            action, amount, key = self._choose(view, adjusted, price, to_call,
+                                               pot, stack)
+            # Confidence is how far from the fence the call is — a spot where
+            # equity and price are neck and neck is a coin flip and should say so.
+            edge = abs(adjusted - price) if to_call > 0 else abs(adjusted - 0.5)
+            confidence = max(0.15, min(0.95, 0.35 + 1.6 * edge))
+            # The spot's color, 0 (white, all clear) .. 4 (purple, get out).
+            # Derived from the numbers, so the LLM overruling the action in
+            # _merge doesn't change it — danger describes the spot, not the plan.
+            danger = danger_level(adjusted, price, threat, to_call)
         return {
             "action": action,
             "amount": amount,
@@ -68,10 +139,11 @@ class HeuristicAdvisor:
             "adjusted": round(adjusted, 4),
             "pot_odds": round(price, 4),
             "threat": round(threat, 3),
-            # The spot's color, 0 (white, all clear) .. 4 (purple, get out).
-            # Derived from the numbers, so the LLM overruling the action in
-            # _merge doesn't change it — danger describes the spot, not the plan.
-            "danger": danger_level(adjusted, price, threat, to_call),
+            "danger": danger,
+            # The preflop yardstick, when that's what the call was made on —
+            # the debrief grades preflop moves by it too (reads.grade_decision).
+            "preflop_tier": tier,
+            "preflop_cost": None if tier is None else round(cost, 2),
             "vs_range": exact,
             "to_call": to_call,
             "pot": pot,
@@ -127,6 +199,42 @@ class HeuristicAdvisor:
             return CALL, 0, "thin_call"
         return CALL, 0, "call_price"
 
+    def _choose_preflop(self, view, tier, to_call, stack, cost):
+        """The preflop policy: tier of the starting hand against the price in
+        big blinds. Deliberately not nitty — the classic failure this replaces
+        was advising a fold on ninety percent of first hands because multiway
+        equity vs random opponents looks tiny."""
+        can_raise = view["can_raise"]
+        if to_call <= 0:
+            if tier >= 2 and can_raise:
+                return RAISE, self._preflop_raise_size(view), "open_raise"
+            return CHECK, 0, "free_card"
+
+        deep = to_call < 0.5 * stack   # calling doesn't commit half the stack
+        if tier == 3:
+            if not deep:
+                return ALL_IN, 0, "jam"
+            if can_raise:
+                return RAISE, self._preflop_raise_size(view), "open_raise"
+            return CALL, 0, "call_price"
+        if tier == 2:
+            if cost <= 1.5 and can_raise:
+                return RAISE, self._preflop_raise_size(view), "open_raise"
+            if cost <= 12 and deep:
+                return CALL, 0, "call_price"
+            return FOLD, 0, "priced_out"
+        if tier == 1:
+            if cost <= 3.5 and deep:
+                return CALL, 0, "speculate"
+            return FOLD, 0, "priced_out"
+        return FOLD, 0, "priced_out"
+
+    def _preflop_raise_size(self, view):
+        """Open to ~3 blinds unopened, ~3x (at least pot-sized) over a raise."""
+        current = view["hero"]["bet_street"] + view["to_call"]
+        target = max(3 * current, current + view["pot"])
+        return int(max(view["min_raise_to"], min(view["max_raise_to"], target)))
+
     def _size(self, view, strength, pot):
         """Bet a fraction of the pot that grows with how far ahead you are —
         the standard value ladder, clamped to what's legal here."""
@@ -165,6 +273,14 @@ class HeuristicAdvisor:
         "probe": [
             ("Nobody wants this pot. Take a stab at it.", "这池子没人要，试着偷一下。"),
             ("Try a small one — they'll fold more than they should.", "小下一个试试，他们弃得比应该的多。"),
+        ],
+        "open_raise": [
+            ("Strong start. Raise — don't let them in cheap.", "起手不错。加注，别让他们便宜进池。"),
+            ("This hand plays better as the raiser. Put chips in.", "这种牌当加注者更好打，下点筹码。"),
+        ],
+        "speculate": [
+            ("Cheap enough to see a flop. Don't get attached.", "这个价看一眼翻牌不亏，但别恋战。"),
+            ("Take the flop at this price, then re-evaluate.", "按这个价看个翻牌，之后再重新评估。"),
         ],
         "free_card": [
             ("Check. Take the free card.", "过牌，白看一张。"),

@@ -33,6 +33,10 @@ class HandFlowMixin:
         self.hand_players = list(self.players)
         for p in self.hand_players:
             p.reset_for_hand()
+        # The public book: everyone at the table was dealt into this hand.
+        self._hand_vpip, self._hand_pfr, self._hand_aggr = set(), set(), set()
+        for p in self.hand_players:
+            self._style(p.name)["hands"] += 1
 
         seats = self.hand_players
         n = len(seats)
@@ -67,6 +71,7 @@ class HandFlowMixin:
         if human is not None and human in seats:
             ui.out(" your cards: %s" % ui.cards_str(human.hole))
         self.update_hero_odds()
+        self.prewarm_advice()   # the coach starts reading before your turn
 
         # Betting streets. A round returning False means everyone folded and
         # the pot has already been awarded; either way the hand is finished, so
@@ -79,10 +84,15 @@ class HandFlowMixin:
                 self.new_street()
                 ui.street_banner(street, self.board, self.pot_total())
                 self.update_hero_odds()
+                self.prewarm_advice()
                 if not self.betting_round((self.button_idx + 1) % n):
                     break
             else:
                 self.showdown()
+        for name in self._hand_vpip:
+            self._style(name)["vpip"] += 1
+        for name in self._hand_pfr:
+            self._style(name)["pfr"] += 1
         self.show_hand_result()
         self.advisor_verdict()   # the coach finds out whether it was right
         self.coach_review()      # ...and debriefs the whole hand, on the record
@@ -142,9 +152,12 @@ class HandFlowMixin:
                 self.update_hero_odds()
             view = self.build_view(p)
             if p.is_human:
-                view["advice"] = self.update_hero_advice(view)
+                # Never blocks: the coach's answer is published into `view`
+                # (and the panel) whenever it lands, even mid-think.
+                self.update_hero_advice(view)
             action, say = p.decide(view)
             reopened, desc, event = self.apply_action(p, action)
+            self.note_style(p, event["kind"])
             self.hand_actions.append(dict(event, name=p.name, street=self.street,
                                           desc=desc))
             self.record(p, desc)
@@ -279,6 +292,9 @@ class HandFlowMixin:
             # The same moves as `history`, structured — what the advisor reads
             # opponents from, and cheap for a brain to ignore.
             "actions": list(self.hand_actions),
+            # The session-long public book on every other player. The seats
+            # get it by skill level; the coach always reads it.
+            "profiles": self.style_profiles(p),
             "history": list(self.history),
             "chat": list(self.chat),
             "memory": list(self.memory),
@@ -303,6 +319,16 @@ class HandFlowMixin:
         contenders = [p for p in self.hand_players if p.in_hand]
         results = {p: evaluator.best_hand(p.hole + self.board) for p in contenders}
         self.shown.update(p.name for p in contenders)
+        # Shown cards go in the public book: what they turned over, and whether
+        # they'd been the one doing the betting. This is how a bluff caught at
+        # showdown follows a player around for the rest of the night.
+        for p in contenders:
+            s = self._style(p.name)
+            note = "Hand %d: %s showed %s (%s)%s." % (
+                self.hand_no, p.name, " ".join(str(c) for c in p.hole),
+                evaluator.hand_name(results[p][0]),
+                " after betting/raising" if p.name in self._hand_aggr else "")
+            s["showdowns"] = (s["showdowns"] + [note])[-3:]
         ui.show_showdown(contenders, results, self.revealed)
 
         summaries = self.award_pots(contenders, results)

@@ -20,8 +20,22 @@ def grade_decision(advice, action):
     """
     if action is None or not advice:
         return None
-    margin = advice["adjusted"] - advice["pot_odds"]
     kind = action.kind
+    tier = advice.get("preflop_tier")
+    if tier is not None:
+        # Preflop is graded on the starting hand's tier — the same yardstick
+        # the advice itself used, because multiway equity vs random hands
+        # would book every correct preflop defend as a "loose call".
+        cost = advice.get("preflop_cost") or 0.0
+        if advice["to_call"] > 0:
+            if kind == FOLD and (tier == 3 or (tier == 2 and cost <= 4)):
+                return GRADE_SCARED_FOLD
+            if kind == CALL and tier == 0 and cost > 1:
+                return GRADE_LOOSE_CALL
+            if kind in (RAISE, ALL_IN) and tier == 0:
+                return GRADE_WILD_RAISE
+        return None
+    margin = advice["adjusted"] - advice["pot_odds"]
     if advice["to_call"] > 0:
         if kind == FOLD and margin >= 0.08:
             return GRADE_SCARED_FOLD

@@ -51,6 +51,8 @@ Options:
 | `--no-coach` | play without the AI coach reading the table for you |
 | `--no-fast-forward` | after you fold, let the AIs keep thinking at full depth instead of finishing the hand on instinct |
 | `--lang zh` | the agents speak Chinese — table talk, reactions, explanations (default `en`) |
+| `--difficulty casual\|standard\|shark` | how sharp the AI seats play — what they remember and track, not a different brain (default `standard`) |
+| `--coach-style beginner\|standard\|pro` | who the coach talks to: beginner explains every term, pro talks ranges and sizing (default `standard`) |
 
 **Fast-forward.** Once you fold, the rest of the hand is bots settling a pot
 you have no stake in — so by default the table hurries: LLM seats finish the
@@ -76,8 +78,9 @@ npm) hosts a browser front-end with a green-felt 2D table: seats around an
 oval, animated dealt cards, community board and pot in the middle, the dealer
 button, per-seat stacks/bets and a "thinking…" glow while an AI decides, and
 speech bubbles when the table talks. A **setup screen** lets you pick your
-name, the number of opponents, stacks, blinds, model, and offline/peek/odds
-modes — every option the terminal has. Click **Fold / Check-Call / Raise** (with
+name, the number of opponents, stacks, blinds, model, the AI difficulty
+(casual / standard / shark), the coach's style (beginner / standard / pro),
+and offline/peek/odds modes — every option the terminal has. Click **Fold / Check-Call / Raise** (with
 a slider and ½·¾·pot shortcuts) **/ All-in**, type in the **Say** box to chat,
 and between hands **buy chips** or deal the next one. A live **table feed** on
 the right logs every action, showdown and remark, and a panel above it tracks
@@ -258,6 +261,18 @@ them a solver would make them something else entirely. Turn it off with
 A second AI stands behind your chair. It doesn't play — it reads the table and
 tells you what to do, and then it has to live with it.
 
+**It never makes you wait.** The coach runs in the background: it starts
+reading your spot the moment a street begins, while the seats in front of you
+are still acting — if the action reaches you unchanged (folds and checks
+don't change the price), its answer is already there. Your buttons are live
+the instant your turn arrives, always: the panel shows the instant arithmetic
+call first, and the model's refined read streams in on top while you think.
+Act before the coach finishes and whatever it hadn't said is simply dropped —
+advice never rewrites itself after the fact, and the debrief only ever grades
+you against what was actually on screen. (The one exception, by design:
+**Follow the coach** mode waits for the coach — delegating your move to it is
+the point of that button.)
+
 ```
  ── the coach ──   72% sure · read the model
    Mike       ████████   bet every street — big pair or a set, not a flush
@@ -321,6 +336,24 @@ you win 47% vs random · 38% vs their range · the price needs 30%   ->  CALL
 
 Call when it beats the price, fold when it doesn't, raise when you're far enough
 ahead to get paid.
+
+**Preflop plays by a different yardstick.** Equity against five random hands
+looks tiny for almost any holding (~17%), but most of those hands fold long
+before the river — pricing preflop on that number used to make the coach
+advise folding nine first hands out of ten. Preflop decisions are now priced
+on the starting hand's tier (premium / strong / playable / junk, an explicit
+chart) against the cost in big blinds: aces raise, ace-king raises, a suited
+connector takes a cheap flop, junk still folds to a raise — and the debrief
+grades preflop moves on the same yardstick, so a correct defend is no longer
+booked as a "loose call".
+
+**It talks to who you are.** Pick the coach's style at setup: **beginner**
+mode explains every term the moment it's used ("pot odds — the share of the
+pot you'd be paying") and ties advice to the buttons on your screen; **pro**
+mode talks ranges, combos, blockers, sizing and multi-street plans and skips
+every basic. And in any mode its sharp tongue has to be earned: it only
+needles you when the session ledger actually shows the same mistake repeating
+— otherwise it stays dry, fair, and constructive.
 
 **The panel wears the spot's color.** White → green → blue → red → purple, each
 step more dangerous, computed from how far your equity against their ranges
@@ -458,6 +491,26 @@ hand and pot odds. They play a loose home-game style: hard to bluff off a
 pot, happy to call with a piece or a draw, and only shoving all-in with a
 real hand — but they still fold trash to big pressure. They bluff, needle
 you, answer your table talk, and hold grudges (and debts) across hands.
+
+**They keep a book on everyone — including you.** The engine maintains a
+session-long public ledger per seat: hands dealt and voluntarily played,
+preflop raises, bets-vs-calls, all-ins, and what was actually shown at
+showdowns ("Hand 3: Mike showed 5♥ K♣ — high card — after betting/raising").
+Nothing in it a person at the table couldn't remember: it's built only from
+public moves and shown cards, never from anything hidden. Every AI seat reads
+that book in its prompt and plays the player, not just the cards — get caught
+bluffing at showdown and the table remembers it for the rest of the night.
+The coach reads the same book behind your chair, so the seats and the coach
+grow sharper from the same experience.
+
+**Difficulty is information, not a different brain.** The same model plays
+every level; `--difficulty` (or the setup select) controls what a seat gets
+to use. **Casual** seats keep no book, remember only the last two hands, and
+are never told the pot odds — they play by feel. **Standard** seats get the
+book, five hands of memory, and the price. **Shark** seats get the full book,
+eight hands of memory, deeper reasoning where the model supports it, and a
+standing instruction to think in ranges and exploit exactly how each player
+has been playing.
 
 **They keep a poker face.** Each decision has two channels: a private
 `think` — the honest read (hand strength, price, draws, plan) that stays in

@@ -65,6 +65,15 @@ def parse_args():
     parser.add_argument("--lang", choices=("en", "zh"), default="en",
                         help="table language: what the agents speak "
                              "(en=English, zh=Chinese; default en)")
+    parser.add_argument("--difficulty", choices=("casual", "standard", "shark"),
+                        default="standard",
+                        help="how sharp the AI seats play: casual plays by feel, "
+                             "shark remembers everything and exploits it "
+                             "(default standard)")
+    parser.add_argument("--coach-style", dest="coach_style",
+                        choices=("beginner", "standard", "pro"), default="standard",
+                        help="who the coach talks to: beginner explains every "
+                             "term, pro talks ranges and sizing (default standard)")
     return parser.parse_args()
 
 
@@ -120,7 +129,8 @@ def main():
         if args.offline:
             brain = HeuristicBrain(personality, rng, lang=args.lang)
         else:
-            brain = LLMBrain(client, model_chain, personality, rng, lang=args.lang)
+            brain = LLMBrain(client, model_chain, personality, rng,
+                             lang=args.lang, skill=args.difficulty)
         players.append(LLMPlayer(personality["name"], args.stack, personality, brain))
 
     print(" Tonight's table: " + ", ".join(ui.name_str(p) for p in players[1:]))
@@ -137,7 +147,8 @@ def main():
     coach = None
     if not args.no_coach and not args.no_odds:
         coach = (HeuristicAdvisor(rng, lang=args.lang) if args.offline
-                 else LLMAdvisor(client, model_chain, rng, lang=args.lang))
+                 else LLMAdvisor(client, model_chain, rng, lang=args.lang,
+                                 mode=args.coach_style))
 
     game = TexasHoldemGame(players, sb=args.sb, bb=args.bb, rng=rng,
                            reveal_all=args.show_cards, language=args.lang,
