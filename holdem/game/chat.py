@@ -191,8 +191,9 @@ class ChatMixin:
                       and not p.folded else "You've folded, but the hand isn't finished yet.")
             parts.append("%s The hand is STILL LIVE, so you must NOT reveal your exact hole "
                          "cards to anyone — keep them secret or bluff, but never state what you "
-                         "truly hold until the hand is over. Your reasoning must still be real "
-                         "and coherent." % stance)
+                         "truly hold until the hand is over. You don't owe anyone your real "
+                         "thinking mid-hand either: deflect, or sell a story that serves your "
+                         "game, as long as it stays coherent with how you've played." % stance)
         else:
             parts.append("The last hand (#%d) just finished — you can be fully honest about it."
                          % self.hand_no)

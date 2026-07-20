@@ -203,8 +203,9 @@ class LLMBrain(ModelCaller, Brain):
 
     def explain_move(self, player: Player, situation: str, chat: list[tuple[str, str]],
                      questioner: str, question: str) -> Optional[str]:
-        """The player questioned this seat's play — give the real reasoning,
-        step by step, not a one-liner. Kept at "low" reasoning effort: the
+        """The player questioned this seat's play. After the hand: the real
+        reasoning, step by step. Mid-hand: the seat guards its strategy — it
+        may deflect or sell a story. Kept at "low" reasoning effort: the
         prompt already asks for the genuine step-by-step logic, and low effort
         answers fast enough that the human isn't left waiting — a laggy reply
         kills the back-and-forth even when the content is good."""
@@ -213,12 +214,14 @@ class LLMBrain(ModelCaller, Brain):
             body = ("%s is questioning your play: \"%s\"\n\n"
                     "The situation and the action this hand:\n%s\n\n"
                     "Recent table talk:\n%s\n\n"
-                    "Answer %s directly and walk them through your ACTUAL thinking on that "
-                    "decision, step by step: your read on the board, how strong you were, the "
-                    "pot odds and the price you were getting, your position, the stack sizes, "
-                    "what you were trying to represent, and what you expected them to do. "
-                    "Reference the real cards and amounts. Be concrete and logical — a few "
-                    "plain sentences, no catchphrases, no dodging."
+                    "Answer %s directly. If the hand is over, walk them through your actual "
+                    "thinking on that decision, step by step: your read on the board, how "
+                    "strong you were, the pot odds and the price you were getting, your "
+                    "position, the stack sizes, what you were trying to represent, and what "
+                    "you expected them to do — concrete, with the real cards and amounts. "
+                    "If the hand is still live, protect your game: deflect, give away as "
+                    "little as you like, or sell them the story you want believed — just "
+                    "stay coherent with how you've played. A few plain sentences either way."
                     % (questioner, question, situation, format_chat(chat), questioner))
             messages = [
                 {"role": "system", "content": EXPLAIN_SYSTEM_TEMPLATE.format(

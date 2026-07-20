@@ -167,10 +167,12 @@ still feeds into everyone's decisions.
 
 **Ask why.** Idle needling gets idle banter, but if you actually *question a
 move* — "Sarah, why did you raise there?", "Dave, explain that call" — the
-game recognizes it and that player walks you through the real reasoning: the
-board, pot odds and price, position, stacks, and what they were representing.
-(While a hand is still live they may keep their exact cards to themselves, but
-the logic they give is genuine, not a brush-off.)
+game recognizes it and that player answers you directly. Once the hand is
+over, you get the real reasoning: the board, pot odds and price, position,
+stacks, and what they were representing. But question them *while the hand is
+still live* and you're playing poker, not attending a seminar — they owe you
+nothing mid-hand, and may deflect, give away as little as they like, or sell
+you exactly the story they want you to believe.
 
 Full no-limit rules: blinds, min-raise tracking, all-ins, split pots and
 side pots. Nobody is ever eliminated: whoever goes broke (you included) is
@@ -457,11 +459,20 @@ pot, happy to call with a piece or a draw, and only shoving all-in with a
 real hand — but they still fold trash to big pressure. They bluff, needle
 you, answer your table talk, and hold grudges (and debts) across hands.
 
-Their talk is bound to their chips: a player can lie all day about *what
-they hold* ("I flopped a set"), but if they announce *what they're doing* —
-"I fold", "I'm all in" — the actual move is forced to match. So a spoken
-call is a call and a spoken shove is a shove; only the card-strength story
-can be a bluff.
+**They keep a poker face.** Each decision has two channels: a private
+`think` — the honest read (hand strength, price, draws, plan) that stays in
+the player's head and is never shown to anyone — and an out-loud `say` the
+whole table hears. The rules of the prompt forbid speaking the real analysis:
+no "it's cheap, I'll take a look", no announcing draws or reads. What they
+*do* say out loud is table craft — acting strong when weak, bored when
+strong, needling, or just silence — so the words you hear are a read to
+decode, not a strategy leak to exploit.
+
+Their talk is still bound to their chips: a player can lie all day about
+*what they hold* ("I flopped a set"), but if they announce *what they're
+doing* — "I fold", "I'm all in" — the actual move is forced to match. So a
+spoken call is a call and a spoken shove is a shove; only the card-strength
+story can be a bluff.
 
 If the API is unreachable mid-game, that opponent quietly falls back to
 built-in instincts, so the game never crashes.
