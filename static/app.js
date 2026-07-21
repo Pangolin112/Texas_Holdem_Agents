@@ -480,14 +480,13 @@ applyFeedVisible();
 
 const PAGE_ORDER = ["table-wrap", "side", "feed"];   // visual (swipe) order
 
-/* On the coach/feed pages the control bar gives its space to the panels —
- * UNLESS the engine is waiting on the player (their move, or between hands):
- * then the bar shows on every page, so they can read the coach and act in
- * the same breath. Desktop ignores all of this via the media query. */
+/* On the coach/feed pages the control bar gives its whole space to the
+ * panels — your own turn is exactly when the coach's read matters most, so
+ * the bar never covers it. The table page always has the buttons; swipe
+ * back there to act. Desktop ignores all of this via the media query. */
 function updateHeroBar() {
-  const waiting = G.mode === "action" || G.mode === "between";
-  const offTable = (G.page || "table-wrap") !== "table-wrap";
-  $("hero-bar").classList.toggle("off-table", offTable && !waiting);
+  $("hero-bar").classList.toggle(
+    "off-table", (G.page || "table-wrap") !== "table-wrap");
 }
 
 function syncTabs() {
@@ -725,7 +724,6 @@ function onAwait(ev) {
   // An input request means the engine is blocked waiting on the human —
   // whatever was "thinking" has necessarily finished.
   G.thinking = null;
-  updateHeroBar();   // waiting on the player: the bar shows on every page
   if (ev.mode === "action") {
     G.legal = ev.legal || {};
     showActionControls();
@@ -840,7 +838,6 @@ function lockControls() {
   $("controls").classList.add("disabled");
   $("raise-panel").classList.add("hidden");
   $("hero-hint").textContent = "";
-  updateHeroBar();   // no longer waiting: off-table pages reclaim the space
 }
 
 /* action: send a command and lock controls until the next request */
@@ -874,7 +871,6 @@ $("next-hand").addEventListener("click", () => {
   // hand is being dealt — it comes back with the next between-hands prompt.
   $("between").classList.add("disabled", "hidden");
   G.mode = null;
-  updateHeroBar();
   postInput("");
 });
 $("buy-go").addEventListener("click", () => {
