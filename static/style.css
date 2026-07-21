@@ -36,11 +36,17 @@ html, body {
 /* ---------------- overlays / setup ---------------- */
 .overlay {
   position: fixed; inset: 0; z-index: 50;
-  display: flex; align-items: center; justify-content: center;
+  display: flex;
   background: rgba(6,9,12,.82); backdrop-filter: blur(4px);
   padding: 20px;
+  /* a card taller than the screen (the setup form on a phone) must scroll —
+     flex centering alone clips BOTH ends and strands the buttons off-screen */
+  overflow-y: auto;
 }
 .setup-card {
+  /* auto margins center it while it fits; once it outgrows the screen they
+     collapse to zero and the overlay scrolls from the top */
+  margin: auto;
   width: min(560px, 96vw);
   background: linear-gradient(180deg, var(--panel-2), var(--panel));
   border: 1px solid var(--line); border-radius: 18px;
