@@ -773,13 +773,20 @@ document.querySelectorAll(".chip-btn").forEach((btn) => {
   });
 });
 
+/* The move is made: lock the bar and shrink it back to one row — the open
+ * raise panel would otherwise sit over the felt until the next turn. */
+function lockControls() {
+  G.mode = null; G.legal = null;
+  $("controls").classList.add("disabled");
+  $("raise-panel").classList.add("hidden");
+  $("hero-hint").textContent = "";
+}
+
 /* action: send a command and lock controls until the next request */
 function act(line) {
   if (!G.sid) return;
   postInput(line);
-  G.mode = null; G.legal = null;
-  $("controls").classList.add("disabled");
-  $("hero-hint").textContent = "";
+  lockControls();
 }
 
 function postInput(line) {
@@ -1125,9 +1132,7 @@ document.querySelectorAll(".auto-btn").forEach((btn) => {
     // If the turn is already ours, the server settles the move right away —
     // lock the controls now so the same move can't also be clicked manually.
     if (mode && G.mode === "action") {
-      G.mode = null; G.legal = null;
-      $("controls").classList.add("disabled");
-      $("hero-hint").textContent = "";
+      lockControls();
     }
     fetch("/api/auto?sid=" + G.sid, {
       method: "POST", headers: { "Content-Type": "application/json" },
