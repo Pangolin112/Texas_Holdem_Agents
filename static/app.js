@@ -1379,7 +1379,9 @@ function cardHTML(c, extra) {
     `<div class="rank">${c.rank}</div><div class="pip">${c.symbol}</div></div>`;
 }
 
-/* speech bubbles anchored above a seat */
+/* speech bubbles anchored to a seat — above it normally, but a top-row seat
+ * hangs its bubble BELOW instead: above would poke out of the table, and the
+ * mobile pager clips overflow, swallowing the line entirely. */
 function showBubble(name, text, to) {
   const pos = G.seatPos[name];
   if (!pos) return;
@@ -1387,8 +1389,11 @@ function showBubble(name, text, to) {
   const old = table.querySelector(`.bubble[data-seat="${cssEsc(name)}"]`);
   if (old) old.remove();
   const b = document.createElement("div");
-  b.className = "bubble"; b.dataset.seat = name;
-  b.style.left = pos.x + "%"; b.style.top = (pos.y - 9) + "%";
+  const below = pos.y < 30;
+  b.className = "bubble" + (below ? " below" : "");
+  b.dataset.seat = name;
+  b.style.left = Math.max(12, Math.min(88, pos.x)) + "%";
+  b.style.top = (below ? pos.y + 9 : pos.y - 9) + "%";
   b.innerHTML = (to ? `<span class="to">@${esc(to)} </span>` : "") + esc(text);
   table.appendChild(b);
   setTimeout(() => b.remove(), 4600);

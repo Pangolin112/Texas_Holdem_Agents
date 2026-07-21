@@ -324,6 +324,12 @@ button { font-family: inherit; cursor: pointer; border: none; }
   content: ""; position: absolute; left: 50%; bottom: -7px; transform: translateX(-50%);
   border: 7px solid transparent; border-top-color: #fff; border-bottom: 0;
 }
+/* flipped variant for top-row seats: bubble hangs under, arrow points up */
+.bubble.below { transform: translate(-50%, 0); }
+.bubble.below::after {
+  bottom: auto; top: -7px;
+  border: 7px solid transparent; border-bottom-color: #fff; border-top: 0;
+}
 .bubble .to { color: #8a5ec2; font-weight: 700; }
 
 /* pot-award banner */
