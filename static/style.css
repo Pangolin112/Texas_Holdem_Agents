@@ -109,6 +109,17 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .pill.dim { color: var(--dim); }
 #mode-label.live { color: var(--gold); border-color: var(--gold-soft); }
 
+/* ---------------- mobile pager tabs ---------------- */
+.mtabs {
+  display: none; flex: 0 0 auto;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+}
+.mtab {
+  flex: 1; padding: 9px 4px; background: none; color: var(--dim);
+  font-size: 13px; border-bottom: 2px solid transparent; border-radius: 0;
+}
+.mtab.active { color: var(--gold); border-bottom-color: var(--gold); }
+
 /* ---------------- layout: table + feed ---------------- */
 /* middle row between the top bar and the hero bar: table on the left,
    history feed on the right — each confined to this row's height so neither
@@ -402,13 +413,24 @@ button { font-family: inherit; cursor: pointer; border: none; }
 
 /* narrow screens: stack the feed under the table */
 @media (max-width: 900px) {
-  #content { flex-direction: column; }
-  #table-wrap { padding: 10px; order: 0; }
+  /* One page at a time: the felt, the odds + coach, the feed — swipe between
+     them (scroll-snap) or tap the tabs above. Nothing stacks, so nothing can
+     cover anything, and the controls keep the bottom of the screen to
+     themselves on every page. */
+  .mtabs { display: flex; }
+  #content {
+    overflow-x: auto; scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch; scrollbar-width: none;
+  }
+  #content::-webkit-scrollbar { display: none; }
+  #table-wrap, #side, #feed {
+    flex: 0 0 100%; max-width: 100%;
+    scroll-snap-align: start; scroll-snap-stop: always;
+  }
+  #table-wrap { padding: 10px; order: 0; overflow-y: auto; }
+  #side { order: 1; border-left: none; }
+  #feed { order: 2; border-right: none; }
   #hero-bar { padding: 10px 12px 12px; }
-  /* stacked: table first, then odds + coach, the feed last */
-  #side { flex: 0 0 auto; order: 1; border-left: none; border-top: 1px solid var(--line); }
-  #feed { flex: 0 0 200px; order: 2; border-right: none; border-top: 1px solid var(--line); }
-  #game { overflow-y: auto; }
 }
 
 /* ---------------- live read: your hand + odds ---------------- */

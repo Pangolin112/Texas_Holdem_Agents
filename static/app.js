@@ -28,6 +28,7 @@ const I18N = {
     cs_beginner: "Beginner — explains every term",
     cs_standard: "Standard",
     cs_pro: "Pro — ranges and sizing",
+    tab_table: "Table", tab_side: "Odds · Coach", tab_feed: "Feed",
     chk_offline: "Offline (built-in bots, no API)",
     chk_peek: "Peek mode (reveal cards after each hand)",
     chk_odds: "Show my live hand strength and win odds",
@@ -155,6 +156,7 @@ const I18N = {
     cs_beginner: "新手——每个术语都解释",
     cs_standard: "标准",
     cs_pro: "老手——聊范围和下注尺度",
+    tab_table: "牌桌", tab_side: "胜率·教练", tab_feed: "动态",
     chk_offline: "离线模式（内置机器人，不调用 API）",
     chk_peek: "偷看模式（每手结束后亮出所有底牌）",
     chk_odds: "显示我的实时牌力与胜率",
@@ -462,6 +464,8 @@ function applyFeedVisible() {
   const on = localStorage.getItem("holdem_feed") !== "0";
   $("feed").classList.toggle("hidden", !on);
   $("btn-feed").classList.toggle("off", !on);
+  const tab = document.querySelector('.mtab[data-target="feed"]');
+  if (tab) tab.classList.toggle("hidden", !on);
 }
 $("btn-feed").addEventListener("click", () => {
   const on = localStorage.getItem("holdem_feed") !== "0";
@@ -469,6 +473,31 @@ $("btn-feed").addEventListener("click", () => {
   applyFeedVisible();
 });
 applyFeedVisible();
+
+/* ---- mobile pager: on narrow screens the three columns become full-width
+ * pages in a horizontal scroll-snap strip — swipe, or tap a tab. The tabs
+ * mirror whichever page the strip has snapped to. ---- */
+
+const PAGE_ORDER = ["table-wrap", "side", "feed"];   // visual (swipe) order
+
+function syncTabs() {
+  const c = $("content");
+  const w = c.clientWidth || 1;
+  const vis = PAGE_ORDER.map($).filter((el) => el && !el.classList.contains("hidden"));
+  if (!vis.length) return;
+  const page = vis[Math.max(0, Math.min(Math.round(c.scrollLeft / w), vis.length - 1))];
+  document.querySelectorAll(".mtab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.target === page.id);
+  });
+}
+$("content").addEventListener("scroll", () => requestAnimationFrame(syncTabs));
+window.addEventListener("resize", syncTabs);
+document.querySelectorAll(".mtab").forEach((b) => {
+  b.addEventListener("click", () => {
+    const el = $(b.dataset.target);
+    if (el) el.scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+  });
+});
 
 /* ------------------------- setup ------------------------- */
 

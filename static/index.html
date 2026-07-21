@@ -87,6 +87,14 @@
     <button id="btn-leave" class="ghost danger" data-i18n="leave" title="Leave the table">Leave</button>
   </header>
 
+  <!-- mobile pager tabs: swipe (or tap) between table / odds·coach / feed;
+       hidden on wide screens where all three columns fit side by side -->
+  <nav id="mtabs" class="mtabs">
+    <button class="mtab active" data-target="table-wrap" data-i18n="tab_table">Table</button>
+    <button class="mtab" data-target="side" data-i18n="tab_side">Odds · Coach</button>
+    <button class="mtab" data-target="feed" data-i18n="tab_feed">Feed</button>
+  </nav>
+
   <div id="content">
   <!-- table feed (history board) — its own LEFT column, toggled by 📋 -->
   <aside id="feed">
@@ -177,7 +185,10 @@
       <span id="auto-state" class="auto-state"></span>
     </div>
 
-    <div id="controls" class="controls disabled">
+    <!-- both bars start hidden: before the first input request there is
+         nothing to click — without this, "Next hand" sat greyed in the
+         controls area while the first hand's AIs were still thinking -->
+    <div id="controls" class="controls disabled hidden">
       <div class="action-row">
         <button id="act-fold" class="act fold" data-i18n="fold">Fold</button>
         <button id="act-call" class="act call" data-i18n="check">Check</button>
@@ -203,7 +214,7 @@
     </div>
 
     <!-- between-hands controls -->
-    <div id="between" class="between disabled">
+    <div id="between" class="between disabled hidden">
       <div class="between-actions">
         <button id="next-hand" class="primary big" data-i18n="next_hand">Next hand ▸</button>
         <div class="buy-box">
