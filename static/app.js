@@ -590,6 +590,9 @@ function handle(ev) {
       clearBubbles(); hideAward();
       resetSummary();
       hideResult();
+      // A new deal means neither bar applies until the engine asks again —
+      // catches every path into a hand, not just the Next-hand click.
+      if (G.mode !== "action") setControls(null);
       G.odds = null; G.result = null;
       G.advice = null; G.verdict = null; G.review = null;
       G.actions = {};
@@ -853,7 +856,9 @@ function showBetweenControls(allowance) {
 }
 
 $("next-hand").addEventListener("click", () => {
-  $("between").classList.add("disabled");
+  // Gone, not greyed: the bar has no business on screen while the next
+  // hand is being dealt — it comes back with the next between-hands prompt.
+  $("between").classList.add("disabled", "hidden");
   G.mode = null;
   postInput("");
 });
