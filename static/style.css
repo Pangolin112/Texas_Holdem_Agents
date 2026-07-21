@@ -61,6 +61,9 @@ html, body {
 .form-grid {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px;
 }
+/* min-width: 0 lets a cell shrink below its content's natural width — without
+   it a <select> with a long option forces its column past the card's edge */
+.form-grid label { min-width: 0; }
 .setup-card label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--dim); }
 .setup-card input[type=text], .setup-card input[type=number] {
   background: #0e141a; border: 1px solid var(--line); color: var(--text);
@@ -692,8 +695,17 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .setup-card select {
   background: #0e141a; border: 1px solid var(--line); color: var(--text);
   border-radius: 9px; padding: 9px 11px; font-size: 15px; outline: none;
+  /* fill the cell, never stretch it: long option text gets ellipsized in the
+     closed box (the opened list still shows it in full) */
+  width: 100%; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .setup-card select:focus { border-color: var(--gold-soft); }
+/* a phone-width card: one column, so the long difficulty / coach-style
+   options get the full width instead of fighting a 50% cell */
+@media (max-width: 480px) {
+  .form-grid { grid-template-columns: 1fr; gap: 10px; }
+}
 
 #btn-tts.off { opacity: 0.55; }
 #btn-feed.off { opacity: 0.55; }
