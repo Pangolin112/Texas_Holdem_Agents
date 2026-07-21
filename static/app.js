@@ -480,15 +480,27 @@ applyFeedVisible();
 
 const PAGE_ORDER = ["table-wrap", "side", "feed"];   // visual (swipe) order
 
+/* On the coach/feed pages the control bar gives its space to the panels —
+ * UNLESS the engine is waiting on the player (their move, or between hands):
+ * then the bar shows on every page, so they can read the coach and act in
+ * the same breath. Desktop ignores all of this via the media query. */
+function updateHeroBar() {
+  const waiting = G.mode === "action" || G.mode === "between";
+  const offTable = (G.page || "table-wrap") !== "table-wrap";
+  $("hero-bar").classList.toggle("off-table", offTable && !waiting);
+}
+
 function syncTabs() {
   const c = $("content");
   const w = c.clientWidth || 1;
   const vis = PAGE_ORDER.map($).filter((el) => el && !el.classList.contains("hidden"));
   if (!vis.length) return;
   const page = vis[Math.max(0, Math.min(Math.round(c.scrollLeft / w), vis.length - 1))];
+  G.page = page.id;
   document.querySelectorAll(".mtab").forEach((b) => {
     b.classList.toggle("active", b.dataset.target === page.id);
   });
+  updateHeroBar();
 }
 $("content").addEventListener("scroll", () => requestAnimationFrame(syncTabs));
 window.addEventListener("resize", syncTabs);
@@ -713,6 +725,7 @@ function onAwait(ev) {
   // An input request means the engine is blocked waiting on the human —
   // whatever was "thinking" has necessarily finished.
   G.thinking = null;
+  updateHeroBar();   // waiting on the player: the bar shows on every page
   if (ev.mode === "action") {
     G.legal = ev.legal || {};
     showActionControls();
@@ -827,6 +840,7 @@ function lockControls() {
   $("controls").classList.add("disabled");
   $("raise-panel").classList.add("hidden");
   $("hero-hint").textContent = "";
+  updateHeroBar();   // no longer waiting: off-table pages reclaim the space
 }
 
 /* action: send a command and lock controls until the next request */
@@ -860,6 +874,7 @@ $("next-hand").addEventListener("click", () => {
   // hand is being dealt — it comes back with the next between-hands prompt.
   $("between").classList.add("disabled", "hidden");
   G.mode = null;
+  updateHeroBar();
   postInput("");
 });
 $("buy-go").addEventListener("click", () => {

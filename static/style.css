@@ -459,6 +459,9 @@ button { font-family: inherit; cursor: pointer; border: none; }
   #side { order: 1; border-left: none; }
   #feed { order: 2; border-right: none; }
   #hero-bar { padding: 10px 12px 12px; }
+  /* on the coach/feed pages the control bar yields its space to the panels;
+     app.js lifts the class the moment the engine waits on the player */
+  #hero-bar.off-table { display: none; }
 }
 
 /* ---------------- live read: your hand + odds ---------------- */
