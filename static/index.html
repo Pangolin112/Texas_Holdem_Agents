@@ -80,7 +80,7 @@
     <span id="blinds-label" class="pill dim">—</span>
     <span id="mode-label" class="pill dim"></span>
     <span class="spacer"></span>
-    <button id="btn-feed" class="ghost" title="Show / hide the side panel · 显示/隐藏侧栏">📋</button>
+    <button id="btn-feed" class="ghost" title="Show / hide the table feed · 显示/隐藏牌桌动态">📋</button>
     <button id="btn-tts" class="ghost" title="Voice output on/off">🔊</button>
     <button id="btn-lang" class="ghost" title="Language / 语言">中文</button>
     <button id="btn-help" class="ghost" title="How to play">?</button>
@@ -88,6 +88,12 @@
   </header>
 
   <div id="content">
+  <!-- table feed (history board) — its own LEFT column, toggled by 📋 -->
+  <aside id="feed">
+    <div class="feed-head" data-i18n="feed_head">Table feed</div>
+    <div id="feed-list"></div>
+  </aside>
+
   <main id="table-wrap">
     <div id="table">
       <div id="felt"></div>
@@ -124,8 +130,8 @@
     </div>
   </main>
 
-  <!-- event / chat feed (history board) -->
-  <aside id="feed">
+  <!-- odds + coach — the RIGHT column, always on -->
+  <aside id="side">
     <!-- live read: your best hand right now + what you can still get to -->
     <div id="advisor" class="advisor hidden">
       <div class="advisor-head">
@@ -154,8 +160,6 @@
         <div id="coach-math" class="coach-math"></div>
       </div>
     </div>
-    <div class="feed-head" data-i18n="feed_head">Table feed</div>
-    <div id="feed-list"></div>
   </aside>
   </div><!-- /content -->
 

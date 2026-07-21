@@ -455,7 +455,8 @@ function applyLang() {
 $("opt-lang").addEventListener("change", () => { G.lang = $("opt-lang").value; applyLang(); });
 $("btn-lang").addEventListener("click", () => { G.lang = G.lang === "zh" ? "en" : "zh"; applyLang(); });
 
-/* ---- side panel (odds + coach + table feed) show/hide, remembered ---- */
+/* ---- table feed (left column) show/hide, remembered. The odds + coach
+ * column on the right is always on — only the feed is optional. ---- */
 
 function applyFeedVisible() {
   const on = localStorage.getItem("holdem_feed") !== "0";
