@@ -489,20 +489,51 @@ function updateHeroBar() {
     "off-table", (G.page || "table-wrap") !== "table-wrap");
 }
 
-function syncTabs() {
+function pagerPages() {
+  return PAGE_ORDER.map($).filter((el) => el && !el.classList.contains("hidden"));
+}
+
+function pagerIndex() {
   const c = $("content");
   const w = c.clientWidth || 1;
-  const vis = PAGE_ORDER.map($).filter((el) => el && !el.classList.contains("hidden"));
+  return Math.max(0, Math.min(Math.round(c.scrollLeft / w), pagerPages().length - 1));
+}
+
+/* Live while swiping: ONLY the tab highlight. Hiding the control bar here
+ * would reflow the page mid-gesture, which kills the scroll-snap momentum
+ * and strands the strip between two pages. */
+function syncTabs() {
+  const vis = pagerPages();
   if (!vis.length) return;
-  const page = vis[Math.max(0, Math.min(Math.round(c.scrollLeft / w), vis.length - 1))];
+  const page = vis[pagerIndex()];
   G.page = page.id;
   document.querySelectorAll(".mtab").forEach((b) => {
     b.classList.toggle("active", b.dataset.target === page.id);
   });
-  updateHeroBar();
 }
-$("content").addEventListener("scroll", () => requestAnimationFrame(syncTabs));
-window.addEventListener("resize", syncTabs);
+
+/* Once the gesture settles: apply the layout change, and if the snap was
+ * disturbed anyway, glide the strip onto the exact page boundary. */
+function settlePager() {
+  clearTimeout(G._settleT);
+  syncTabs();
+  updateHeroBar();
+  if (!matchMedia("(max-width: 900px)").matches) return;
+  const c = $("content");
+  const w = c.clientWidth || 1;
+  const target = pagerIndex() * w;
+  if (Math.abs(c.scrollLeft - target) > 2) {
+    c.scrollTo({ left: target, behavior: "smooth" });
+  }
+}
+
+$("content").addEventListener("scroll", () => {
+  requestAnimationFrame(syncTabs);
+  clearTimeout(G._settleT);
+  G._settleT = setTimeout(settlePager, 150);   // fallback where scrollend is missing
+});
+if ("onscrollend" in window) $("content").addEventListener("scrollend", settlePager);
+window.addEventListener("resize", settlePager);
 document.querySelectorAll(".mtab").forEach((b) => {
   b.addEventListener("click", () => {
     const el = $(b.dataset.target);
