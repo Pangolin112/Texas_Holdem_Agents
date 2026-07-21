@@ -467,7 +467,9 @@ button { font-family: inherit; cursor: pointer; border: none; }
 
 /* ---------------- the coach ---------------- */
 .coach {
-  flex: 0 0 auto; border-bottom: 1px solid var(--line);
+  /* grows to fill the column below the odds panel, so its danger tint owns
+     the whole lower half instead of leaving a bare strip underneath */
+  flex: 1 1 auto; min-height: 0; border-bottom: 1px solid var(--line);
   padding: 10px 12px 12px; background: linear-gradient(180deg, #1b1a26, var(--panel));
 }
 
