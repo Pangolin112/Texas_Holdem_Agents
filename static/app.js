@@ -455,6 +455,20 @@ function applyLang() {
 $("opt-lang").addEventListener("change", () => { G.lang = $("opt-lang").value; applyLang(); });
 $("btn-lang").addEventListener("click", () => { G.lang = G.lang === "zh" ? "en" : "zh"; applyLang(); });
 
+/* ---- side panel (odds + coach + table feed) show/hide, remembered ---- */
+
+function applyFeedVisible() {
+  const on = localStorage.getItem("holdem_feed") !== "0";
+  $("feed").classList.toggle("hidden", !on);
+  $("btn-feed").classList.toggle("off", !on);
+}
+$("btn-feed").addEventListener("click", () => {
+  const on = localStorage.getItem("holdem_feed") !== "0";
+  localStorage.setItem("holdem_feed", on ? "0" : "1");
+  applyFeedVisible();
+});
+applyFeedVisible();
+
 /* ------------------------- setup ------------------------- */
 
 $("deal-in").addEventListener("click", startGame);
