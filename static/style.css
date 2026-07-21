@@ -391,7 +391,10 @@ button { font-family: inherit; cursor: pointer; border: none; }
   box-shadow: 0 0 0 1px rgba(179,157,219,.4);
 }
 .auto-btn.coach-mode { border-color: #4a3f66; color: #c9b6ea; }
-.auto-btn.coach-mode:hover { border-color: #b39ddb; color: #d9c6ea; }
+/* same rule as the gold buttons: hover lightens, only ARMED wears the accent */
+@media (hover: hover) {
+  .auto-btn.coach-mode:hover { border-color: #6f5f96; color: #d9c6ea; }
+}
 .auto-btn.coach-mode.armed { background: #2f2545; color: #d9c6ea; border-color: #b39ddb; }
 .act:hover { filter: brightness(1.08); }
 
@@ -570,11 +573,17 @@ button { font-family: inherit; cursor: pointer; border: none; }
   background: #0e141a; color: #b6c1cb; border: 1px solid var(--line);
   border-radius: 20px; padding: 4px 12px; font-size: 12px; transition: all .15s;
 }
-.auto-btn:hover { border-color: var(--gold-soft); color: var(--gold); }
+/* hover is a neutral lighten — gold is reserved for the ARMED state, so a
+   just-cancelled button still under the cursor can never look armed. The
+   media guard keeps touch screens from wearing a sticky hover after a tap. */
+@media (hover: hover) {
+  .auto-btn:hover { border-color: #5a6672; color: #e4ebf2; }
+}
 .auto-btn.armed {
   background: #3a2a10; color: #ffc65a; border-color: var(--gold);
   box-shadow: 0 0 0 1px rgba(230,184,0,.35);
 }
+.auto-btn.armed::before { content: "✓ "; }
 .auto-state { color: var(--gold-soft); font-size: 11.5px; }
 
 /* ---------------- finished-hand review ---------------- */
