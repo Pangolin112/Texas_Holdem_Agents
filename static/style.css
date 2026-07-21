@@ -487,7 +487,11 @@ button { font-family: inherit; cursor: pointer; border: none; }
      the whole lower half instead of leaving a bare strip underneath */
   flex: 1 1 auto; min-height: 0; border-bottom: 1px solid var(--line);
   padding: 10px 12px 12px; background: linear-gradient(180deg, #1b1a26, #14131b);
+  display: flex; flex-direction: column;
 }
+/* the body flexes inside the panel so the reads list below can grow into
+   every free pixel instead of scrolling inside an arbitrary cap */
+#coach-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 
 /* The spot's danger, worn as the panel's background: white -> green -> blue ->
    red -> purple, each step more dangerous. The switch is deliberately instant —
@@ -533,7 +537,9 @@ button { font-family: inherit; cursor: pointer; border: none; }
 .coach-why { color: var(--dim); font-size: 11px; line-height: 1.45; margin-top: 5px; }
 .coach-reads {
   margin: 8px 0 6px; display: flex; flex-direction: column; gap: 6px;
-  max-height: 132px; overflow-y: auto;
+  /* no fixed cap: take all the free height the panel has (it stretches to
+     the bottom of the column), and only scroll when even that runs out */
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
 }
 .read-row { font-size: 11px; }
 .read-top { display: grid; grid-template-columns: auto 1fr 56px; gap: 6px; align-items: center; }
